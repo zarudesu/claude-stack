@@ -1,0 +1,212 @@
+{
+  "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "40000",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com",
+    "OTEL_EXPORTER_OTLP_HEADERS": "<basic-auth-redacted>",
+    "OTEL_LOG_USER_PROMPTS": "1",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"
+  },
+  "skillOverrides": {
+    "ab-testing": "off",
+    "ad-creative": "off",
+    "ads": "off",
+    "ai-seo": "off",
+    "analytics": "off",
+    "aso": "off",
+    "churn-prevention": "off",
+    "co-marketing": "off",
+    "cold-email": "off",
+    "community-marketing": "off",
+    "competitor-profiling": "off",
+    "competitors": "off",
+    "content-strategy": "off",
+    "copy-editing": "off",
+    "copywriting": "off",
+    "cro": "off",
+    "customer-research": "off",
+    "directory-submissions": "off",
+    "emails": "off",
+    "free-tools": "off",
+    "launch": "off",
+    "lead-magnets": "off",
+    "marketing-council": "off",
+    "marketing-ideas": "off",
+    "marketing-loops": "off",
+    "marketing-plan": "off",
+    "marketing-psychology": "off",
+    "offers": "off",
+    "onboarding": "off",
+    "paywalls": "off",
+    "popups": "off",
+    "pricing": "off",
+    "product-marketing": "off",
+    "programmatic-seo": "off",
+    "prospecting": "off",
+    "public-relations": "off",
+    "referrals": "off",
+    "revops": "off",
+    "sales-enablement": "off",
+    "schema": "off",
+    "seo-audit": "off",
+    "signup": "off",
+    "site-architecture": "off",
+    "sms": "off",
+    "social": "off",
+    "video": "off",
+    "image": "off",
+    "grill-me": "off",
+    "grill-with-docs": "off",
+    "ui-ux-pro-max": "off"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/track-time.sh claude"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/warn-session-length.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/track-time.sh claude"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/secret-scan-precommit.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/guard-destructive.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/decider-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/guard-sensitive-files.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/format-on-write.sh"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/notify.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/checkpoint-on-stop.sh"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/notify.sh"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/track-time.sh claude"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f .claude/pm/_active.md ] && { echo '## Active work (.claude/pm/_active.md)'; cat .claude/pm/_active.md; } || true"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/track-time.sh claude"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f .claude/pm/_active.md ] && { echo '## Active work (re-injected after compaction)'; cat .claude/pm/_active.md; } || true"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/compact-mark.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline-combined.sh",
+    "padding": 0
+  }
+}
