@@ -61,3 +61,4 @@
 - `/redesign-existing-projects` (redesign-skill) · `/minimalist-ui` · `/industrial-brutalist-ui` · `/high-end-visual-design` (soft-skill)
 - `/brandkit` (брендбук) · `/stitch-design-taste` (DESIGN.md для Google Stitch) · `/full-output-enforcement` (без placeholder-кода)
 Не ставил: taste-skill-v1, gpt-tasteskill, imagegen-* (image-gen), image-to-code (под Codex). Источник в репе, обновление: git clone + повторить копирование с флагом.
+- `attribution` — attribution-модели, multi-touch/MMM/incrementality (добавлен 2026-08-27 при обновлении маркетинг-пака, выключен как весь пак)
