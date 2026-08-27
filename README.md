@@ -10,7 +10,7 @@
 
 Рассчитано на опытных разработчиков, которые уже работают с Claude Code и хотят собрать похожий контур себе.
 
-Живая версия страницы: [claude.zardes.dev](https://claude.zardes.dev).
+Живая версия страницы: [claude.zardes.dev](https://claude.zardes.dev). Репозиторий: [github.com/zarudesu/claude-stack](https://github.com/zarudesu/claude-stack).
 
 ## Содержание
 
