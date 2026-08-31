@@ -1,4 +1,5 @@
 {
+  "promptCacheTtl": "1h",
   "env": {
     "MAX_MCP_OUTPUT_TOKENS": "40000",
     "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
