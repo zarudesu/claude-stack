@@ -48,7 +48,7 @@ effort: high
 
 | Size | Триггер | Worker | Main role | Фазы |
 |------|---------|--------|-----------|------|
-| **S** | <50 LOC / 1-2 файла / понятный фикс | 1× haiku | supervise + review | 3+4 |
+| **S** | <50 LOC / 1-2 файла / понятный фикс | 1× sonnet | supervise + review | 3+4 |
 | **M** | 50-500 LOC, 1 модуль | 2-3× sonnet | plan + reconcile | 2-5 |
 | **L** | 500+ LOC, многомодульная | 4-6 mixed | PM | full pipeline |
 | **XL** | архитектурное / >2 дней / auth/data | 6-10 mixed | PM, effort max | full + /sec |
