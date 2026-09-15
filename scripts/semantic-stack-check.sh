@@ -15,7 +15,7 @@ if ! docker info >/dev/null 2>&1; then
 else
   STATE=$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' milvus-standalone 2>/dev/null)
   if [ -z "$STATE" ]; then
-    fail "контейнер milvus-standalone ОТСУТСТВУЕТ (см. SETUP.md claude-config, §4 — пересоздать)"
+    fail "контейнер milvus-standalone ОТСУТСТВУЕТ (пересоздать: README, раздел «Semantic search стек → Установка»)"
   elif [ "${STATE%% *}" != "running" ]; then
     fail "milvus-standalone не running: $STATE (crash-loop? docker logs milvus-standalone)"
   elif [ "${STATE##* }" != "healthy" ]; then
@@ -28,7 +28,7 @@ else
     if ! printf '%s' "$RESP" | grep -q '"code":0'; then
       fail "Milvus REST не отвечает на запросы (healthz жив, а запросы нет): ${RESP:0:120}"
     elif ! printf '%s' "$RESP" | grep -q 'hybrid_code_chunks'; then
-      fail "Milvus пуст — коллекции claude-context пропали (реиндекс: reindex-claude-context.py)"
+      fail "Milvus пуст — коллекции claude-context пропали (реиндекс: scripts/reindex-claude-context.py)"
     else
       N=$(printf '%s' "$RESP" | grep -o 'hybrid_code_chunks' | wc -l | tr -d ' ')
       ok "Milvus отвечает, коллекций: $N"

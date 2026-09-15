@@ -1,5 +1,6 @@
 {
   "promptCacheTtl": "1h",
+  "autoCompactWindow": 200000,
   "env": {
     "MAX_MCP_OUTPUT_TOKENS": "40000",
     "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
@@ -200,6 +201,15 @@
             "command": "$HOME/.claude/hooks/track-time.sh claude"
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/postcompact-inject.sh"
+          }
+        ]
       }
     ],
     "PostCompact": [
@@ -207,7 +217,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -f .claude/pm/_active.md ] && { echo '## Active work (re-injected after compaction)'; cat .claude/pm/_active.md; } || true"
+            "command": "$HOME/.claude/hooks/postcompact-inject.sh"
           }
         ]
       }
@@ -217,7 +227,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/compact-mark.sh"
+            "command": "$HOME/.claude/hooks/compact-state.sh"
           }
         ]
       }
