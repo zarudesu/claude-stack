@@ -30,6 +30,11 @@ DEFAULT_ENV = {
 CONFIG = os.path.expanduser(
     os.environ.get("CLAUDE_CONTEXT_MCP_CONFIG", "~/.claude.json")
 )
+# Pinned on purpose: a different server version can change embedding defaults,
+# and the vector dimension is baked into the Milvus collection.
+MCP_PACKAGE = os.environ.get(
+    "CLAUDE_CONTEXT_MCP_PACKAGE", "@zilliz/claude-context-mcp@0.1.15"
+)
 
 
 def server_env():
@@ -47,7 +52,7 @@ def server_env():
 class McpClient:
     def __init__(self):
         self.proc = subprocess.Popen(
-            ["npx", "-y", "@zilliz/claude-context-mcp@latest"],
+            ["npx", "-y", MCP_PACKAGE],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=open(os.path.expanduser("~/.claude/reindex-claude-context.err"), "ab"),
             env=server_env(), text=True, bufsize=1,
