@@ -36,6 +36,15 @@ else
   fi
 fi
 
+# --- Ollama (эмбеддер для claude-context) ---
+if ! TAGS=$(curl -s -m 5 http://127.0.0.1:11434/api/tags) || [ -z "$TAGS" ]; then
+  fail "Ollama не отвечает на 127.0.0.1:11434 — индексация упадёт на detect embedding dimension (поднять: brew services start ollama)"
+elif ! printf '%s' "$TAGS" | grep -q 'qwen3-embedding:0.6b'; then
+  fail "Ollama жив, но модели qwen3-embedding:0.6b нет (ollama pull qwen3-embedding:0.6b)"
+else
+  ok "Ollama отвечает, модель qwen3-embedding:0.6b на месте"
+fi
+
 # --- grepai watcher ---
 if ! pgrep -f "grepai watch" >/dev/null 2>&1; then
   fail "grepai watcher не бежит (поднять: cd ~/Projects && grepai watch --background)"
