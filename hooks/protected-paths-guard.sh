@@ -1,7 +1,7 @@
 #!/bin/bash
 # PreToolUse guard (matcher: Edit|Write|NotebookEdit): subagents must not write
 # directly to protected Claude-config paths (agents/skills/settings/CLAUDE.md/hooks).
-# Detection mirrors decider-gate.sh: agent_id present in hook input => subagent.
+# Detection: agent_id present in hook input => subagent.
 # Override: PROTECTED_PATHS_ALLOW=1
 input=$(cat)
 agent=$(printf '%s' "$input" | jq -r '.agent_id // empty')

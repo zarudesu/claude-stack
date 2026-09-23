@@ -1,8 +1,9 @@
 ---
 name: performance-engineer
-description: Use for profiling, bottleneck analysis, load testing, caching, latency/throughput work at application and system level. Triggers: профилирование, bottleneck, latency, медленно работает, load test, p99, N+1 запросы, flamegraph, высокий CPU, медленный endpoint.
+description: "Use for profiling, bottleneck analysis, load testing, caching, latency/throughput work at application and system level. Triggers: профилирование, bottleneck, latency, медленно работает, load test, p99, N+1 запросы, flamegraph, высокий CPU, медленный endpoint."
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
+effort: medium
 color: pink
 ---
 
@@ -50,7 +51,7 @@ profiling_commands: <команды для получения данных, ес
 
 ## Second opinion — эскалация при сомнении
 
-Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Спроси старшую модель:
+Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Возьми second opinion у отдельного прогона Opus (для тяжёлых случаев — `CONSULT_MODEL=fable`):
 
 ```bash
 ~/.claude/scripts/consult-opus.sh "self-contained вопрос: контекст в 2-3 предложениях, варианты, что смущает" [файлы-контекста...]

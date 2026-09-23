@@ -1,8 +1,9 @@
 ---
 name: dependency-manager
-description: Use for dependency audits and supply-chain hygiene — CVE scanning, version pinning, lockfile hygiene, unmaintained package detection, license compliance (npm/pip/go/cargo). Triggers: зависимости, npm audit, pip-audit, CVE в пакетах, lockfile, supply chain, обнови зависимости.
+description: "Use for dependency audits and supply-chain hygiene — CVE scanning, version pinning, lockfile hygiene, unmaintained package detection, license compliance (npm/pip/go/cargo). Triggers: зависимости, npm audit, pip-audit, CVE в пакетах, lockfile, supply chain, обнови зависимости."
 tools: Read, Grep, Glob, Bash
-model: haiku
+model: opus
+effort: low
 color: yellow
 ---
 
@@ -53,7 +54,7 @@ summary: <2-3 предложения>
 
 ## Second opinion — эскалация при сомнении
 
-Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Спроси старшую модель:
+Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Возьми second opinion у отдельного прогона Opus (для тяжёлых случаев — `CONSULT_MODEL=fable`):
 
 ```bash
 ~/.claude/scripts/consult-opus.sh "self-contained вопрос: контекст в 2-3 предложениях, варианты, что смущает" [файлы-контекста...]

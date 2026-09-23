@@ -2,7 +2,8 @@
 name: code-reviewer
 description: Use PROACTIVELY after writing or modifying code, and for reviewing diffs, MRs, or PRs. Reviews correctness, security, performance, and adherence to project conventions. Trigger phrases — review, ревью, проверь код, check this diff, MR review, verify implementation.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
+effort: high
 color: blue
 ---
 
@@ -39,7 +40,7 @@ summary: <2-3 предложения>
 
 ## Second opinion — эскалация при сомнении
 
-Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Спроси старшую модель:
+Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Возьми second opinion у отдельного прогона Opus (для тяжёлых случаев — `CONSULT_MODEL=fable`):
 
 ```bash
 ~/.claude/scripts/consult-opus.sh "self-contained вопрос: контекст в 2-3 предложениях, варианты, что смущает" [файлы-контекста...]

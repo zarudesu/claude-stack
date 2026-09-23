@@ -1,6 +1,6 @@
 ---
 name: fable-deep
-description: Heavy Fable 5 pass with 1M context and xhigh effort — whole-repo architecture decisions, cross-cutting refactor plans, hard debugging that needs the full codebase in one window. ONLY on explicit user permission for this specific call; never auto-triggered. Expensive: one call ≈ a large slice of the weekly limit.
+description: "Heavy Fable 5 pass with 1M context and xhigh effort — whole-repo architecture decisions, cross-cutting refactor plans, hard debugging that needs the full codebase in one window. ONLY on explicit user permission for this specific call; never auto-triggered. Expensive: one call ≈ a large slice of the weekly limit."
 model: claude-fable-5[1m]
 effort: xhigh
 color: magenta

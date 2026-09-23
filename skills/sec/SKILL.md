@@ -38,17 +38,17 @@ run-id формат: `YYYYMMDD-HHmm` (например `20260601-1430`).
 | Layer | Что делает | Модель | Почему |
 |-------|-----------|--------|--------|
 | L1 Secrets | grep + tools | haiku | тулы делают работу |
-| L2 SAST | вызывает /security-review + semgrep | sonnet | паттерны |
+| L2 SAST | вызывает /security-review + semgrep | opus, effort medium | паттерны |
 | L3 Deps | npm/pip/cargo audit | haiku | команды |
-| L4 Config | nginx/k8s/IaC | sonnet | |
-| L5 Container | trivy/hadolint | sonnet | |
-| L6 Network | nmap + diff vs expected | sonnet | |
+| L4 Config | nginx/k8s/IaC | opus, effort medium | |
+| L5 Container | trivy/hadolint | opus, effort medium | |
+| L6 Network | nmap + diff vs expected | opus, effort medium | |
 | L7 TLS | testssl.sh | haiku | парсинг output |
-| **L8 Auth review** | JWT/session/RBAC semantic | **opus** | агент `security-auditor` |
-| **L9 Data flow** | PII tracking, logs, backups | **opus** | агент `security-auditor` |
-| Reconcile | финальный отчёт | opus | синтез |
+| **L8 Auth review** | JWT/session/RBAC semantic | **opus, effort high** | агент `security-auditor` |
+| **L9 Data flow** | PII tracking, logs, backups | **opus, effort high** | агент `security-auditor` |
+| Reconcile | финальный отчёт | opus, effort high | синтез |
 
-Цель: ≤50% subagent токенов — opus (L8/L9 + reconcile). Остальное — sonnet/haiku.
+Цель: effort high только в L8/L9 + reconcile; L2/L4–L6 — opus effort medium; L1/L3/L7 — haiku (механика). Сначала снижай effort, модель не меняй.
 
 «Security — единственный AI workload который НЕ оптимизируется через token-shaving в семантических слоях.» Подмена Opus → Sonnet в L8/L9 — это false-negative там где он стоит дорого.
 

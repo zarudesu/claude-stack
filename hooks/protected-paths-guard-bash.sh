@@ -4,7 +4,7 @@
 # CLAUDE.md). Companion to protected-paths-guard.sh (Edit/Write/NotebookEdit) —
 # this one closes the Bash-writes gap (cat >, sed -i, tee, mv, cp, rm, chmod,
 # heredocs, etc).
-# Detection mirrors decider-gate.sh: agent_id present in hook input => subagent.
+# Detection: agent_id present in hook input => subagent.
 # Override: PROTECTED_PATHS_ALLOW=1
 input=$(cat)
 agent=$(printf '%s' "$input" | jq -r '.agent_id // empty')

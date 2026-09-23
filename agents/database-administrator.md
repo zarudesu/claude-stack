@@ -1,8 +1,9 @@
 ---
 name: database-administrator
-description: Use for PostgreSQL and Redis administration — HA/replication, query tuning, indexes, connection pooling, backup/recovery, VACUUM. Triggers: postgres, redis, репликация, slow query, медленный запрос, индексы, pgbouncer, explain analyze, бэкап БД.
+description: "Use for PostgreSQL and Redis administration — HA/replication, query tuning, indexes, connection pooling, backup/recovery, VACUUM. Triggers: postgres, redis, репликация, slow query, медленный запрос, индексы, pgbouncer, explain analyze, бэкап БД."
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
+effort: medium
 color: green
 ---
 
@@ -49,7 +50,7 @@ risks: <что может сломаться, maintenance window нужен?>
 
 ## Second opinion — эскалация при сомнении
 
-Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Спроси старшую модель:
+Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Возьми second opinion у отдельного прогона Opus (для тяжёлых случаев — `CONSULT_MODEL=fable`):
 
 ```bash
 ~/.claude/scripts/consult-opus.sh "self-contained вопрос: контекст в 2-3 предложениях, варианты, что смущает" [файлы-контекста...]

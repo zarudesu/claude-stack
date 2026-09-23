@@ -2,7 +2,7 @@
 name: security-auditor
 description: Use for deep security analysis — auth flows, session management, secrets handling, data/PII flow, access control, crypto. Called by /sec audit (L8/L9 layers) and ad-hoc when changes touch auth, payments, credentials, or public API surface. Trigger phrases — security audit, аудит безопасности, проверь auth, secrets leak, уязвимости.
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
-model: sonnet
+model: opus
 effort: high
 color: red
 ---

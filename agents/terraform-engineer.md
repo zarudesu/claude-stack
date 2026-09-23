@@ -1,8 +1,9 @@
 ---
 name: terraform-engineer
-description: Use for Terraform IaC — modules, plan/apply review, state backends, workspaces, policy-as-code, drift detection. Complements ansible-devops (Ansible/compose). Triggers: terraform, .tf файлы, tfstate, tfvars, terraform plan/apply, tfsec, terragrunt, HCL.
+description: "Use for Terraform IaC — modules, plan/apply review, state backends, workspaces, policy-as-code, drift detection. Complements ansible-devops (Ansible/compose). Triggers: terraform, .tf файлы, tfstate, tfvars, terraform plan/apply, tfsec, terragrunt, HCL."
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: opus
+effort: medium
 color: indigo
 ---
 
@@ -47,7 +48,7 @@ state_risks: <есть ли риск потери state, нужен ли backup 
 
 ## Second opinion — эскалация при сомнении
 
-Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Спроси старшую модель:
+Упёрся в критичную развилку (два валидных решения с дорогой ценой ошибки, спорный вердикт, неуверенный root cause) — НЕ гадай и НЕ выбирай молча. Возьми second opinion у отдельного прогона Opus (для тяжёлых случаев — `CONSULT_MODEL=fable`):
 
 ```bash
 ~/.claude/scripts/consult-opus.sh "self-contained вопрос: контекст в 2-3 предложениях, варианты, что смущает" [файлы-контекста...]
