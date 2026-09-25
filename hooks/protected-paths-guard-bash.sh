@@ -26,8 +26,10 @@ Q="['\"]?"
 
 # 1. redirect whose target is a protected path: > P, >> P, 2> P, &> P
 r1="(^|[^<])>>?[[:space:]]*${Q}${P}"
-# 2. cp/mv/ln/install/rsync with protected path as LAST argument (destination)
-r2="(^|[;|&(][[:space:]]*|[[:space:]])(cp|mv|ln|install|rsync)[[:space:]][^;|&]*[[:space:]]${Q}${P}${Q}[[:space:]]*(;|\||&|$)"
+# 2. cp/mv/ln/install/rsync with protected path as LAST argument (destination), trailing redirects allowed
+r2="(^|[;|&(][[:space:]]*|[[:space:]])(cp|mv|ln|install|rsync)[[:space:]][^;|&]*[[:space:]]${Q}${P}${Q}[[:space:]]*([0-9]*>|;|\||&|$)"
+# 2t. protected path given via a target/output option: cp -t, --target-directory, curl -o, wget -O, tar -C, unzip -d
+r2t="(^|[;|&(][[:space:]]*|[[:space:]])((cp|mv|ln|install|rsync)[[:space:]][^;|&]*(-t|--target-directory)|curl[[:space:]][^;|&]*(-o|--output)|wget[[:space:]][^;|&]*(-O|--output-document)|tar[[:space:]][^;|&]*(-C|--directory)|unzip[[:space:]][^;|&]*-d)([[:space:]]+|=)${Q}${P}"
 # 3. in-place/destructive tools with a protected path anywhere in the same simple command
 r3="(^|[;|&(][[:space:]]*|[[:space:]])(sed[[:space:]]+-[a-zA-Z]*i|perl[[:space:]]+-[a-zA-Z]*i|tee([[:space:]]+-[a-z]+)*|truncate|chmod|chown|rm|dd|shred|touch)[[:space:]][^;|&]*${P}"
 # 4. scripted write: protected path opened for write / write_text / unlink / rename in the same line
@@ -42,7 +44,7 @@ r6w="['\"](w|a|wb|ab|w\\+|a\\+)['\"]|write_text|write_bytes|os\\.(remove|rename|
 r6s="<<|python[23]?[[:space:]]+-c|perl[[:space:]]+-e|ruby[[:space:]]+-e"
 
 block=0
-for re in "$r1" "$r2" "$r3" "$r4"; do
+for re in "$r1" "$r2" "$r2t" "$r3" "$r4"; do
   printf '%s' "$cmd" | grep -Eq "$re" && block=1 && break
 done
 if [ "$block" = 0 ] && printf '%s' "$cmd" | grep -Eq "$r5a" && printf '%s' "$cmd" | grep -Eq "$r5b"; then

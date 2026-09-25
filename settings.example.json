@@ -84,6 +84,18 @@
     "events": "off",
     "influencer-marketing": "off"
   },
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -fr /)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -fr ~)",
+      "Bash(rm -rf ~/)",
+      "Bash(rm -fr ~/)",
+      "Bash(dd if=* of=/dev/*)",
+      "Bash(mkfs*)"
+    ]
+  },
   "hooks": {
     "UserPromptSubmit": [
       {

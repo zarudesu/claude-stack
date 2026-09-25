@@ -302,7 +302,28 @@ ALWAYS-ON: режет преамбулы, пересказ вопроса, ве�
 Сняты и в `settings.example.json` не подключены:
 
 - `decider-gate` (2026-09-02) — см. «Архитектура сессии»; из репозитория удалён.
-- `guard-destructive.sh` и `guard-sensitive-files.sh` (2026-09-01) — сетап работает в режиме без подтверждений (`bypassPermissions`), а оба хука только спрашивали подтверждение. Файлы остались в `hooks/`: подключаются обратно блоком `PreToolUse` с матчерами `Bash` и `Read|Edit|Write`, если такой режим не нужен.
+- `guard-destructive.sh` и `guard-sensitive-files.sh` (2026-09-01) — у автора выключены осознанно. Оба возвращают `ask`, то есть останавливают работу до ответа человека, и не различают главный поток и субагентов (проверки `agent_id` нет). Регэксп `rm[[:space:]]+-[a-zA-Z]*[rf]` ловит любой `rm -f`, поэтому фоновые субагенты постоянно вставали на подтверждении. Сетап работает в `bypassPermissions`, где такие вопросы не нужны.
+
+**Если вы не в `bypassPermissions` — эти два хука рекомендуется включить.** Файлы лежат в `hooks/`, регистрация в `settings.json`:
+
+```json
+"PreToolUse": [
+  {
+    "matcher": "Bash",
+    "hooks": [{ "type": "command", "command": "$HOME/.claude/hooks/guard-destructive.sh" }]
+  },
+  {
+    "matcher": "Read|Edit|Write",
+    "hooks": [{ "type": "command", "command": "$HOME/.claude/hooks/guard-sensitive-files.sh" }]
+  }
+]
+```
+
+Что из защит осталось включённым и без них:
+
+- **deny-лист в `permissions`** (`settings.example.json`) — `rm -rf`/`rm -fr` по `/`, `~` и `~/`, `dd if=* of=/dev/*`, `mkfs*`; действует и в `bypassPermissions`.
+- **`secret-scan-precommit.sh`** — блокирует `git commit` с секретом в staged-изменениях.
+- **`protected-paths-guard.sh` и `protected-paths-guard-bash.sh`** — `exit 2` на запись субагента в конфиг Claude Code (`agents/`, `skills/`, `hooks/`, `settings.json`, `CLAUDE.md`), инструментами Edit/Write или через шелл.
 
 ## Скрипты и фоновые задания
 
