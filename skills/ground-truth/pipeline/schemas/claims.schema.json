@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "claims finder output",
+  "type": "object",
+  "required": ["claims_found", "written_to"],
+  "properties": {
+    "claims_found": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["quote", "file", "line", "claim", "hint", "source"],
+        "properties": {
+          "quote": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "claim": { "type": "string" },
+          "hint": { "type": "string" },
+          "source": { "type": "string" }
+        }
+      }
+    },
+    "written_to": { "type": "string" }
+  }
+}

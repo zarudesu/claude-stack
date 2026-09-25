@@ -1,0 +1,32 @@
+# Example only. Replace repositories, areas and paths using actual research.
+# This file does not declare a prepared project until reviewed and accepted.
+version: 1
+enforcement: advisory
+repositories:
+  app:
+    path: .
+    watch: ["."]
+    exclude:
+      - path: "generated/**"
+        why: "Derived output; generator/schema belong to covered source areas."
+areas:
+  - id: api-contract
+    repo: app
+    summary: "Public API and compatibility contract"
+    sources: ["src/api", "tests/api"]
+    docs: ["docs/context/api.md"]
+    depends_on: []
+    entrypoints: ["src/api/routes.py:register_routes"]
+    checks: ["project-specific API test command"]
+    unknowns: ["Replace with actual unresolved questions, or [] after review."]
+  - id: client
+    repo: app
+    summary: "Client of the public API"
+    sources: ["src/client", "tests/client"]
+    docs: ["docs/context/client.md"]
+    depends_on: ["api-contract"]
+    entrypoints: ["src/client/index.ts"]
+    checks: ["project-specific client compatibility test command"]
+    unknowns: []
+# Include remaining observed code/config/docs/tooling in researched areas.
+# Optional external evidence expiry: valid_until: "2026-12-01T00:00:00Z"

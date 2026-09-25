@@ -1,0 +1,64 @@
+"""Fails when STATUS.yaml no longer matches the repo it describes.
+
+Generated from the ground-truth skill template; keep in sync with the copy
+under tools/ground_truth/. Each test below runs one group of contract_lib
+checks and fails with the full list of issues that group found.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+
+def _find_root(start: Path) -> Path:
+    for candidate in [start, *start.parents]:
+        if (candidate / "STATUS.yaml").is_file():
+            return candidate
+    raise RuntimeError(f"STATUS.yaml not found above {start}")
+
+
+ROOT = _find_root(Path(__file__).resolve().parent)
+sys.path.insert(0, str(ROOT / "tools" / "ground_truth"))
+
+import contract_lib  # noqa: E402
+
+DATA = contract_lib.load_contract(ROOT)
+
+
+def _fail_on(issues: list[contract_lib.Issue]) -> None:
+    fails = [i for i in issues if i.severity == "fail"]
+    if fails:
+        lines = [f"{i.claim_id}: {i.message}" for i in fails]
+        pytest.fail("\n".join(lines))
+
+
+def test_contract_shape():
+    _fail_on(contract_lib.check_shape(ROOT, DATA))
+
+
+def test_contract_coverage():
+    _fail_on(contract_lib.check_coverage(ROOT, DATA))
+
+
+def test_contract_collectible():
+    _fail_on(contract_lib.check_collectible(ROOT, DATA, "sync"))
+
+
+def test_contract_links():
+    issues = [i for i in contract_lib.check_links(ROOT, DATA, "sync") if "debt" not in i.message]
+    _fail_on(issues)
+
+
+def test_contract_debt():
+    issues = [
+        i
+        for i in contract_lib.check_shape(ROOT, DATA) + contract_lib.check_links(ROOT, DATA, "sync")
+        if "debt" in i.message
+    ]
+    _fail_on(issues)
+
+
+def test_contract_assertion_density():
+    _fail_on(contract_lib.check_assertion_density(ROOT, DATA))

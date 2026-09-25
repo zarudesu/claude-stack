@@ -1,0 +1,45 @@
+name: ground-truth
+on: [push, pull_request]
+jobs:
+  # Full mode re-runs the project's unit suite through a probe, so this
+  # job needs the same dependencies and env the project's own test job
+  # already sets up -- it is not self-contained the way sync mode would be.
+  verify-status-contract:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 gives the job the base commit the status-raise guard
+      # compares against; a shallow checkout leaves GT_BASE_REF unresolvable
+      # and the required CI guard fails closed.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
+          # Example only: install the same dependencies as the project's
+          # test job (plus pyyaml and pytest, which the verifier itself
+          # needs) -- copy that job's install line rather than retyping it.
+          # A probe that collects every tracked test file needs the import
+          # dependencies of every one of them, not only of the suite this
+          # workflow's own test job runs.
+          pip install -r requirements-dev.txt
+      - name: verify status contract
+        env:
+          # Example only: pass the same env the project's test job passes.
+          # The unit suite the probe re-runs needs it to import cleanly.
+          # BOT_TOKEN: "..."
+          # DEBUG: "true"
+          GT_BASE_REF: "${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}"
+        run: |
+          python3 tools/ground_truth/verify.py --mode=full
+          python3 tools/ground_truth/gt_context.py check
+          # citations in STATUS.yaml must still point at the right line after this diff
+          python3 tools/ground_truth/remap_line_refs.py --check --base "${GT_BASE_REF:-HEAD~1}" STATUS.yaml
+          # canaries: every claim carrying a mutation still goes red under it
+          python3 tools/ground_truth/gt_mutation_selfcheck.py --strict
+          # same three rules the Stop hook runs, against the pushed diff
+          python3 tools/ground_truth/gt_session_guard.py --mode ci

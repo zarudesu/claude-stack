@@ -1,0 +1,53 @@
+// Bridge test: makes `go test ./...` fail together with the status
+// contract. Copy this file into any Go package in the repo (rename the
+// package line to match its directory) -- one copy per repo is enough,
+// since the verifier itself checks the whole repo regardless of which
+// package invoked it.
+//
+// Set PACKAGE_NAME below to the real package of the directory you copy
+// this into before committing.
+package PACKAGE_NAME
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// findRepoRoot walks up from the current working directory until it finds
+// a directory containing STATUS.yaml, or fails the test if none exists
+// within a reasonable number of parent directories.
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("could not determine working directory: %v", err)
+	}
+	for i := 0; i < 32; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "STATUS.yaml")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatalf("could not find STATUS.yaml walking up from %s", dir)
+	return ""
+}
+
+func TestStatusContract(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH -- status contract verifier cannot run here")
+	}
+
+	root := findRepoRoot(t)
+	cmd := exec.Command("python3", "tools/ground_truth/verify.py", "--mode=sync")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("status contract verifier failed:\n%s", out)
+	}
+}

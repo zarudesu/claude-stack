@@ -1,0 +1,42 @@
+// Bridge test: makes the JS/TS test run fail together with the status
+// contract. Works with either vitest or jest -- both expose `describe`/
+// `test`/`expect` with this same shape. Copy into the repo's test tree
+// under a name your existing test runner already picks up (for example
+// `status_contract.test.ts`).
+import { spawnSync } from "node:child_process";
+import * as path from "node:path";
+import * as fs from "node:fs";
+
+function findRepoRoot(startDir: string): string {
+  let dir = startDir;
+  for (let i = 0; i < 32; i++) {
+    if (fs.existsSync(path.join(dir, "STATUS.yaml"))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  throw new Error(`could not find STATUS.yaml walking up from ${startDir}`);
+}
+
+describe("status contract", () => {
+  test("verify.py --mode=sync passes", () => {
+    const root = findRepoRoot(__dirname);
+    const python = spawnSync("python3", ["tools/ground_truth/verify.py", "--mode=sync"], {
+      cwd: root,
+      encoding: "utf-8",
+    });
+
+    if (python.error && (python.error as NodeJS.ErrnoException).code === "ENOENT") {
+      // python3 not on PATH in this environment -- nothing to bridge to.
+      return;
+    }
+
+    if (python.status !== 0) {
+      throw new Error(`status contract verifier failed:\n${python.stdout}${python.stderr}`);
+    }
+  });
+});

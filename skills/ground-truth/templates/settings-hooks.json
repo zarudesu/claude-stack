@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/ground-truth-sync-check.sh  # gt-allow: real hook path, not prose",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/ground-truth-session-start.sh  # gt-allow: real hook path, not prose",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/ground-truth-edit-guard.sh  # gt-allow: real hook path, not prose",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

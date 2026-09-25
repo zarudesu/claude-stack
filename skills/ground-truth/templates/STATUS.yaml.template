@@ -1,0 +1,91 @@
+# STATUS.yaml -- machine-readable status contract for this repository.
+# Verified by tools/ground_truth/verify.py; a claim and the code it points
+# at are never allowed to disagree without the verifier saying so.
+schema_version: 1
+
+meta:
+  repo: example-repo               # informational, matches the git remote name; not enforced
+  enforcement: advisory            # advisory | blocking -- blocking fails the Stop hook, not just CI
+  last_audited: "2026-09-04"       # date of the last full audit pass
+  # last_audited_commit: "9f2c1ab"  # optional; sha audited at, written by the audit close
+                                    # step -- how many files changed since then decides
+                                    # whether the next audit is already due
+  stale_after_days: 30             # optional; default 30 -- live_state notes older than this WARN
+  coverage:
+    roots:                         # directories that must be fully covered by claims below
+      - "services/"
+      - "handlers/"
+    exclude:
+      - "services/generated/**"    # fnmatch glob; every exclusion needs a reason, here or in note
+    extensions: [".py"]            # optional; default: .py .go .ts .tsx .js .sh .kt
+    runner: pytest                 # pytest | go_test | js_test | junit | none -- default hint for new claims
+  banned_words:                    # optional; scopes the banned-word scan (D16)
+    exclude:
+      - path: "app/services/blocked_ip_service.py"  # fnmatch glob; "*" crosses "/"
+        why: "product data: the service lists IP ranges of the third-party providers it blocks"
+      # STATUS.yaml itself, tools/ground_truth/** and tests/** can never be
+      # listed here -- check_shape FAILs an entry that would cover them.
+
+claims:
+  # kind: status -- a claim about code. status + check_kind + check are
+  # required; command and pointer are forbidden.
+  # canary: true + mutation are an ATTRIBUTE of this real claim, never a
+  # separate claim -- gt_mutation_selfcheck.py applies mutation.find ->
+  # mutation.replace to mutation.file, expects the check below to fail,
+  # then reverts it. At least one claim per repo carries this pair.
+  - id: renewal_reminder_sends_before_expiry
+    component: "renewal reminder service"
+    kind: status
+    status: implemented            # implemented | partial | stub | absent | design-only
+    path: "services/renewal_reminder_service.py"
+    check_kind: pytest
+    check: "tests/test_renewal_reminder_service.py::TestRenewalReminder::test_sends_three_days_before_expiry"
+    depends_on: []                 # optional; local claim ids this one relies on
+    see_also: []                   # optional; local claim ids worth cross-reading
+    canary: true
+    mutation:
+      file: "services/renewal_reminder_service.py"
+      find: "DAYS_BEFORE_EXPIRY = 3"
+      replace: "DAYS_BEFORE_EXPIRY = 30"
+    note: "sends exactly three days before expiry; see the test for the boundary case. Also the repo's mutation-selfcheck canary -- do not remove canary/mutation without moving them to another claim."
+
+  # a stub found during audit and left honest rather than implemented.
+  - id: homenet_health_probe_wiring
+    component: "homenet health probe -> alert path"
+    kind: status
+    status: stub
+    path: "services/homenet_health.py"
+    check_kind: pytest
+    check: "tests/test_homenet_health.py::TestHomenetHealth::test_probe_wired_but_returns_not_implemented"
+    note: "docs called this live monitoring before this audit; the function body raises NotImplementedError."
+
+  # kind: live_state -- a claim about something that changes without a
+  # commit here. command is required; status/check_kind/check/pointer are
+  # forbidden. Never store the observed value itself, only how to get it.
+  - id: webhook_secret_matches_deployed
+    component: "payment webhook secret actually configured in production"
+    kind: live_state
+    command: "ssh <deploy-host> 'grep WEBHOOK_SECRET /opt/app/.env' and diff against services/payment_notifications.py:PAYMENT_SECRET_ENV"
+    note: "no stored value here on purpose -- see the stale live_state rule."
+
+  # kind: out_of_repo -- the claim's subject has no code in this repo.
+  # pointer is required; status/check_kind/check/command are forbidden.
+  - id: vendor_panel_capacity_field
+    component: "vendor panel API -- per-node capacity field"
+    kind: out_of_repo
+    pointer: "vendor panel product, not this repo's code -- see docs/PANEL-API.md"
+    note: "this repo only consumes the field if present; it cannot implement or fake it."
+
+edges:                             # cross-service relationships a static import graph cannot see
+  - from: renewal_reminder_sends_before_expiry
+    to: "billing-service:reach_matrix"   # local claim id, or "<repo-name>:<free text>"
+    probe: "tools/ground_truth/probes/reach_matrix_reachable.py"   # required; exit 0 = edge holds now
+
+debt:                              # structured debt, always tied to exactly one claim
+  - id: homenet_health_needs_implementation
+    ref: homenet_health_probe_wiring         # required: the claim this debt is about
+    description: "stub raises NotImplementedError; docs described it as live before this audit."
+    severity: normal                # blocking | normal | cosmetic
+    state: open                     # open | accepted | resolved
+    owner: ""                       # blank = unassigned, not nobody's problem
+    opened: "2026-09-04"

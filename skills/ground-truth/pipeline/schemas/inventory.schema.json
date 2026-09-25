@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "inventory finder output",
+  "type": "object",
+  "required": ["files", "onboarding_chain", "coldstart_bundle_before_bytes", "written_to"],
+  "properties": {
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "bytes", "purpose_one_line"],
+        "properties": {
+          "path": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "purpose_one_line": { "type": "string" }
+        }
+      }
+    },
+    "onboarding_chain": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "coldstart_bundle_before_bytes": { "type": "integer" },
+    "written_to": { "type": "string" }
+  }
+}

@@ -1,0 +1,42 @@
+# Paste this job into an existing .gitlab-ci.yml. Adjust `stage:` to match
+# an existing stage in that file (this assumes a "test" stage exists).
+# Full mode re-runs the project's unit suite through a probe, so this job
+# needs the same dependencies and env the project's own test job already
+# sets up -- it is not self-contained the way sync mode would be.
+# A `cache:` path inside the checkout ($CI_PROJECT_DIR/.pip-cache and the
+# like) must be gitignored: the verifier scans untracked files for banned
+# words and third-party package metadata is full of them. i9_install
+# reports such paths as ci_cache_unignored and adds them on --write.
+status-contract:
+  stage: test
+  # No dependency on earlier stages: a lint or build failure elsewhere must
+  # not hide whether the contract still matches the code.
+  needs: []
+  variables:
+    # Full history: the status-raise guard needs the base commit, and a
+    # shallow clone leaves GT_BASE_REF unresolvable.
+    GIT_DEPTH: 0
+  # If the project's test job sets itself up through a before_script or a
+  # YAML anchor (system packages, placeholder secret files, a chmod of the
+  # build dir), reuse it here as `before_script: - *anchor`: the probes run
+  # the same commands those tests run and fail the same way without it.
+  script:
+    - export GT_BASE_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
+    # git and ripgrep: the verifier shells out to both (ls-files, base-ref diff, banned-word scan); slim/alpine python images ship neither.
+    - (command -v apt-get >/dev/null && apt-get update -qq && apt-get install -y -qq git ripgrep) || (command -v apk >/dev/null && apk add --no-cache git ripgrep)
+    # Example only: install the same dependencies as the project's test
+    # job (plus pyyaml and pytest, which the verifier itself needs) --
+    # copy that job's install line rather than retyping it. Also export
+    # whatever env that job passes (fake tokens, DEBUG flags, etc.) so the
+    # probe's re-run of the unit suite imports cleanly. A probe that
+    # collects every tracked test file needs the import dependencies of
+    # every one of them, not only of the suite the project's job runs.
+    - pip install -r requirements-dev.txt
+    - python3 tools/ground_truth/verify.py --mode=full
+    - python3 tools/ground_truth/gt_context.py check
+    # citations in STATUS.yaml must still point at the right line after this diff
+    - python3 tools/ground_truth/remap_line_refs.py --check --base "${GT_BASE_REF:-HEAD~1}" STATUS.yaml
+    # canaries: every claim carrying a mutation still goes red under it
+    - python3 tools/ground_truth/gt_mutation_selfcheck.py --strict
+    # same three rules the Stop hook runs, against the pushed diff
+    - python3 tools/ground_truth/gt_session_guard.py --mode ci

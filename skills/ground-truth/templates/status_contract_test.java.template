@@ -1,0 +1,62 @@
+// Bridge test: makes `mvn test` fail together with the status contract.
+// Copy this file into any Maven module's src/test/java/<package> in the
+// repo -- one copy per repo is enough, since the verifier itself checks
+// the whole repo regardless of which module invoked it.
+//
+// Set PACKAGE_NAME below to the real package of the directory you copy
+// this into before committing.
+package PACKAGE_NAME;
+
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.concurrent.TimeUnit;
+
+public class StatusContractTest {
+
+    // findRepoRoot walks up from the current working directory until it
+    // finds a directory containing STATUS.yaml, or fails the test if none
+    // exists within a reasonable number of parent directories.
+    private static Path findRepoRoot() {
+        Path dir = Paths.get(System.getProperty("user.dir"));
+        for (int i = 0; i < 32; i++) {
+            if (Files.isRegularFile(dir.resolve("STATUS.yaml"))) {
+                return dir;
+            }
+            Path parent = dir.getParent();
+            if (parent == null || parent.equals(dir)) {
+                break;
+            }
+            dir = parent;
+        }
+        return Assertions.fail("could not find STATUS.yaml walking up from " + System.getProperty("user.dir"));
+    }
+
+    @Test
+    void statusContract() throws IOException, InterruptedException {
+        boolean pythonAvailable;
+        try {
+            new ProcessBuilder("python3", "--version").start().waitFor();
+            pythonAvailable = true;
+        } catch (IOException e) {
+            pythonAvailable = false;
+        }
+        Assumptions.assumeTrue(pythonAvailable, "python3 not on PATH -- status contract verifier cannot run here");
+
+        Path root = findRepoRoot();
+        Process process = new ProcessBuilder("python3", "tools/ground_truth/verify.py", "--mode=sync")
+                .directory(root.toFile())
+                .redirectErrorStream(true)
+                .start();
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        boolean finished = process.waitFor(180, TimeUnit.SECONDS);
+        Assertions.assertTrue(finished, "status contract verifier timed out after 180s");
+        Assertions.assertEquals(0, process.exitValue(), output);
+    }
+}

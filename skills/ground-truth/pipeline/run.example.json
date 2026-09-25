@@ -1,0 +1,8 @@
+{
+  "repo": "/abs/path/to/repo-or-worktree",
+  "research": "/abs/path/to/pm/<slug>/research",
+  "scratch": "/abs/path/to/scratch",
+  "python": "/abs/path/to/python",
+  "skill": "/abs/path/to/skills/ground-truth",
+  "date": "2026-01-01"
+}

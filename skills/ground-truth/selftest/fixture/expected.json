@@ -1,0 +1,40 @@
+{
+  "components": {
+    "app/ledger.py": { "status": "implemented", "check_kind": "pytest" },
+    "app/export.py": { "status": "partial", "or_split": ["implemented", "stub"] },
+    "app/notify.py": { "status": "stub" },
+    "app/scheduler.py": { "status": "absent", "or_id_contains": "scheduler" },
+    "svc/quorum.go": { "status": "implemented", "check_kind": "go_test" },
+    "web/state.js": { "status": "implemented", "check_kind": "js_test" }
+  },
+  "debt_must_exist": [
+    { "about": "secret literal", "path": "app/config.py" },
+    { "about": "to_json NotImplemented", "path": "app/export.py" },
+    { "about": "notify stub", "path": "app/notify.py" },
+    { "about": "scheduler documented but absent", "path": "docs/ARCHITECTURE.md" }
+  ],
+  "docs_false_claims": [
+    {
+      "file": "docs/ARCHITECTURE.md",
+      "quote": "Export supports both CSV and JSON output formats.",
+      "why_false": "to_json() raises NotImplementedError"
+    },
+    {
+      "file": "docs/ARCHITECTURE.md",
+      "quote": "Notify delivers messages by email through SMTP, with retries on failure.",
+      "why_false": "send() is a no-op stub that returns None"
+    },
+    {
+      "file": "docs/ARCHITECTURE.md",
+      "quote": "`app/scheduler.py` runs the export job every night on a cron schedule.",
+      "why_false": "app/scheduler.py does not exist in the repository"
+    },
+    {
+      "file": "README.md",
+      "quote": "There are no secrets in this repository.",
+      "why_false": "app/config.py contains API_TOKEN = \"sk-fixture-000000000000\""
+    }
+  ],
+  "canary_min": 1,
+  "coverage_roots": ["app", "svc", "web"]
+}

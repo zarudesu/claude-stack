@@ -1,0 +1,15 @@
+# Append this entry to an existing .pre-commit-config.yaml's `repos:` list.
+# Only add this file if .pre-commit-config.yaml already exists in the
+# target repository -- pre-commit itself is not installed as a new
+# dependency by this addition.
+- repo: local
+  hooks:
+    - id: ground-truth-verify
+      name: ground-truth status contract
+      # The system python lacks the project's own deps (pyyaml, etc.) --
+      # running the verifier under it reports false FAILs on import, not
+      # real drift, so this resolves the project's own interpreter first.
+      entry: sh -c 'exec "${GT_PYTHON:-$( [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3 )}" tools/ground_truth/verify.py --mode=sync'
+      language: system
+      pass_filenames: false
+      always_run: true
