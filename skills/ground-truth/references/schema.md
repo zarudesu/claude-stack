@@ -172,7 +172,7 @@
 
 ### 5.3 Обратная проверка
 
-Для каждого claim'а с `path` (любой `kind`, не только `status`) — путь (каждый элемент, если список) обязан существовать относительно корня репозитория. Переименовали/удалили файл, claim остался → FAIL `claim path no longer exists: <path>`.
+Для каждого claim'а с `path` (любой `kind`, не только `status`) — путь (каждый элемент, если список) обязан существовать относительно корня репозитория. Переименовали/удалили файл, claim остался → FAIL `path '<path>' does not exist`.
 
 ### 5.4 Разобранные примеры
 
@@ -180,27 +180,27 @@
 
 ```
 meta.coverage.roots: ["services/"]
-файлы на диске: services/reminder.py, services/health.py
-claims: path: "services/reminder.py"  (claim A)
-        path: "services/"           (claim B, каталожный уровень)
+файлы на диске: services/invoice_reminder.py, services/report_worker_health.py
+claims: path: "services/invoice_reminder.py"  (claim A)
+        path: "services/"                    (claim B, каталожный уровень)
 ```
-`services/reminder.py` покрыт claim'ом A (равенство) И claim'ом B (A — предок через `services/`). `services/health.py` покрыт только claim'ом B (директория-предок). Coverage чист — второй файл не orphan, потому что claim B взял на себя весь каталог.
+`services/invoice_reminder.py` покрыт claim'ом A (равенство) И claim'ом B (A — предок через `services/`). `services/report_worker_health.py` покрыт только claim'ом B (директория-предок). Coverage чист — второй файл не orphan, потому что claim B взял на себя весь каталог.
 
 **Пример 2 — orphan.**
 
 ```
 meta.coverage.roots: ["handlers/"]
-файлы: handlers/subscribe.py, handlers/unsubscribe.py
-claims: path: "handlers/subscribe.py"
+файлы: handlers/order_commands.py, handlers/refund_commands.py
+claims: path: "handlers/order_commands.py"
 ```
-`handlers/unsubscribe.py` не равен и не имеет claim'а-предка на всю `handlers/` → **FAIL** `orphan code, no claim covers handlers/unsubscribe.py`. Чинится либо новым claim'ом на `unsubscribe.py`, либо переводом claim'а subscribe на каталог `handlers/`, если оба файла — один смысловой компонент.
+`handlers/refund_commands.py` не равен и не имеет claim'а-предка на всю `handlers/` → в `--mode=full` **FAIL** `handlers/refund_commands.py is not covered by any claim` (в `--mode=sync` та же находка — WARN с подсказкой `fix:`). Чинится либо новым claim'ом на `refund_commands.py`, либо переводом claim'а на каталог `handlers/`, если оба файла — один смысловой компонент.
 
 **Пример 3 — протухший claim.**
 
 ```
-claims: path: "services/invoice_reminder.py"   # файл переименован в services/reminder.py
+claims: path: "services/invoice_reminder.py"   # файл переименован в services/reminders.py
 ```
-Файла по старому пути нет → **FAIL** `claim path no longer exists: services/invoice_reminder.py`, независимо от orphan-проверки (это отдельная, вторая часть two-way).
+Файла по старому пути нет → **FAIL** `path 'services/invoice_reminder.py' does not exist`, независимо от orphan-проверки (это отдельная, вторая часть two-way).
 
 **Пример 4 — exclude.**
 
@@ -228,7 +228,7 @@ meta.coverage.exclude: ["scripts/one_off/**"]
 
 Единственное поле сверх общих — `pointer`: где субъект реально живёт (другой git-репозиторий, вендорский продукт, внешний API). Используется, когда у ЭТОГО репозитория нет кода, который мог бы реализовать или подделать факт — попытка завести здесь `status` была бы unfalsifiable claim, запрещённым R2/A1.
 
-Кросс-репозиторное ребро «мой компонент зависит от компонента в чужом репо» этим и выражается (прототипный паттерн — claim вида `sync_agent_retry_stub` в STATUS.yaml прототипного репозитория; он не опубликован и был бы референсом стиля, не схемы: там нет `check_kind`, схема с тех пор ушла вперёд).
+Зависимость «мой компонент опирается на компонент в чужом репо» выражается этим же kind'ом: claim `out_of_repo` с `pointer` на тот репозиторий; если связь можно проверить, она дополнительно объявляется в `edges[]` с пробой (§9).
 
 ## 8. Гранулярность claim'а (D7, D22)
 
@@ -244,15 +244,15 @@ meta.coverage.exclude: ["scripts/one_off/**"]
 
 **Несколько claim'ов на один файл — норма.** Один файл спокойно несёт два claim'а с разными статусами, если в нём смешаны разные предметы: живой путь и мёртвый рядом с ним, оплата `implemented` и возврат `stub`, поллер `implemented` и его wiring `absent` — все три пары встречались на прогоне. Правило разрешения: **`status` принадлежит concern'у, а не файлу.** Вопрос «какой статус у этого файла» некорректен; корректен «какой статус у этого поведения». Навигатор и грейдер выбирают claim по concern'у из формулировки задачи, а не по совпадению пути. `blast_radius.py` печатает `status` рядом с каждым claim'ом, попавшим на путь, — при двух claim'ах на файле видно оба, и выбор делается глазами, а не угадыванием.
 
-**Чего при этом делать нельзя.** Два claim'а с **одинаковым `path` и одинаковым `check`**, но разными `status` (на прогоне: `schema_graph_check` `partial` и `schema_validator` `implemented` на одном файле и одном тесте) — это не гранулярность, а два ответа на один вопрос: один и тот же тест одновременно и доказывает, и не доказывает. Пару обязан поймать judge-synthesis на I.3.5; верификатор её не ловит — `check_shape` сверяет claim'ы только по `id` (§3) и `debt.id` (§10), совпадение `path`+`check` при разных `status` в его проверки не входит. Разрешается одним из двух способов: **merge** в один claim со статусом по слабейшей части — либо **разведение check'ов**, когда у каждого claim'а свой `check`, доказывающий именно его concern, плюс обязательные перекрёстные `see_also` и `note`, называющие границу между ними. Оставить как есть нельзя ни в одном варианте.
+**Чего при этом делать нельзя.** Два claim'а с **одинаковым `path` и одинаковым `check`**, но разными `status` (например, `migration_order_guard` `partial` и `migration_chain_validator` `implemented` на одном `scripts/check_migrations.py` и одном тесте) — это не гранулярность, а два ответа на один вопрос: один и тот же тест одновременно и доказывает, и не доказывает. Пару обязан поймать judge-synthesis на I.3.5; верификатор её не ловит — `check_shape` сверяет claim'ы только по `id` (§3) и `debt.id` (§10), совпадение `path`+`check` при разных `status` в его проверки не входит. Разрешается одним из двух способов: **merge** в один claim со статусом по слабейшей части — либо **разведение check'ов**, когда у каждого claim'а свой `check`, доказывающий именно его concern, плюс обязательные перекрёстные `see_also` и `note`, называющие границу между ними. Оставить как есть нельзя ни в одном варианте.
 
 ## 9. `edges[]` — кросс-claim/кросс-репо рёбра, обязательная проба
 
 ```yaml
 edges:
   - from: invoice_reminder_sends_before_due     # id claim'а В ЭТОМ файле
-    to: "billing-service:health_matrix"              # id claim'а ИЛИ "<внешний-репо/домен>:<свободный текст>"
-    probe: "tools/ground_truth/probes/health_matrix_reachable.py"   # ОБЯЗАТЕЛЕН
+    to: "mailer:send_api"                         # id claim'а ИЛИ "<внешний-репо/домен>:<свободный текст>"
+    probe: "tools/ground_truth/probes/mailer_send_api_reachable.py"   # ОБЯЗАТЕЛЕН
 ```
 
 | Ключ | Обязателен | Описание |
@@ -299,8 +299,8 @@ debt:
 ## 11. `canary` + `mutation` — атрибут claim'а, не отдельный claim (D20)
 
 ```yaml
-- id: invoice_reminder_shape_canary
-  component: "status-contract mutation self-check anchor"
+- id: invoice_reminder_sends_before_due
+  component: "invoice reminder service"
   kind: status
   status: implemented
   path: "services/invoice_reminder.py"
@@ -311,7 +311,7 @@ debt:
     file: "services/invoice_reminder.py"
     find: "DAYS_BEFORE_DUE = 3"
     replace: "DAYS_BEFORE_DUE = 30"
-  note: "canary for tools/ground_truth/gt_mutation_selfcheck.py -- do not remove without replacing it"
+  note: "also the canary for tools/ground_truth/gt_mutation_selfcheck.py -- move canary to another claim before removing this one"
 ```
 
 | Ключ | Где | Обязателен | Описание |

@@ -937,7 +937,7 @@ def fault_scenarios() -> bool:
     finally:
         shutil.rmtree(fake_git_dir, ignore_errors=True)
 
-    with patched(status_path, "    to: handlers_http\n", '    to: "billing-service:health_matrix"\n'):
+    with patched(status_path, "    to: handlers_http\n", '    to: "mailer:send_api"\n'):
         cp = verify("sync")
         ok &= record(
             "18: edge.to accepts any '<name>:<text>' external shape, not just 'external-repo:'",
@@ -1822,19 +1822,19 @@ def edge_case_scenarios() -> bool:
 # jvm/pom.xml marks the module, fx.Ledger.balance() is the code under test,
 # fx.LedgerTest carries the probe marker the fake mvn above reads.
 JUNIT_CLAIM = (
-    "  - id: ledger_fit\n"
+    "  - id: ledger_books_balance\n"
     '    component: "ledger"\n'
     "    kind: status\n"
     "    status: implemented\n"
     "    check_kind: junit\n"
-    '    check: "fx.LedgerTest::balanceIsYes"\n'
+    '    check: "fx.LedgerTest::booksBalance"\n'
     '    path: "jvm/src/main/java/fx/Ledger.java"\n'
-    '    note: "Ledger.balance() reports yes; the canary flips the returned string."\n'
+    '    note: "Ledger.balance() reports balanced; the canary flips the returned string."\n'
     "    canary: true\n"
     "    mutation:\n"
     '      file: "jvm/src/main/java/fx/Ledger.java"\n'
-    "      find: 'return \"yes\"'\n"
-    "      replace: 'return \"yas\"'\n"
+    "      find: 'return \"balanced\"'\n"
+    "      replace: 'return \"unbalanced\"'\n"
 )
 
 JVM_POM = (
@@ -1852,7 +1852,7 @@ JVM_LEDGER = (
     "// Ledger reports whether the books balance.\n"
     "public class Ledger {\n"
     "    public static String balance() {\n"
-    '        return "yes";\n'
+    '        return "balanced";\n'
     "    }\n"
     "}\n"
 )
@@ -1863,11 +1863,11 @@ JVM_LEDGER_TEST = (
     "import org.junit.jupiter.api.Test;\n"
     "import static org.junit.jupiter.api.Assertions.assertEquals;\n"
     "\n"
-    '// probe: src/main/java/fx/Ledger.java contains return "yes"\n'
+    '// probe: src/main/java/fx/Ledger.java contains return "balanced"\n'
     "public class LedgerTest {\n"
     "    @Test\n"
-    "    void balanceIsYes() {\n"
-    '        assertEquals("yes", Ledger.balance());\n'
+    "    void booksBalance() {\n"
+    '        assertEquals("balanced", Ledger.balance());\n'
     "    }\n"
     "}\n"
 )
@@ -1899,20 +1899,20 @@ def junit_scenarios() -> bool:
 
         cp = verify("full", junit_env())
         ok &= record(
-            "69: junit claim green -> exit 0, no WARN/FAIL for ledger_fit",
-            cp.returncode == 0 and "ledger_fit" not in out(cp),
+            "69: junit claim green -> exit 0, no WARN/FAIL for ledger_books_balance",
+            cp.returncode == 0 and "ledger_books_balance" not in out(cp),
             out(cp),
         )
 
-        with patched(ledger_path, 'return "yes"', 'return "yas"'):
+        with patched(ledger_path, 'return "balanced"', 'return "unbalanced"'):
             cp = verify("full", junit_env())
             ok &= record(
                 "70: junit claim whose test is red -> exit 1 in full",
-                cp.returncode != 0 and "ledger_fit" in out(cp),
+                cp.returncode != 0 and "ledger_books_balance" in out(cp),
                 out(cp),
             )
 
-        with patched(status_path, 'check: "fx.LedgerTest::balanceIsYes"', 'check: "fx.LedgerTest::nope"'):
+        with patched(status_path, 'check: "fx.LedgerTest::booksBalance"', 'check: "fx.LedgerTest::nope"'):
             cp = verify("sync", toolchain_free_env())
             ok &= record(
                 "71: static phantom method -> sync catches it without mvn",
@@ -1934,7 +1934,7 @@ def junit_scenarios() -> bool:
             out(cp),
         )
 
-        cp = mutation_selfcheck("ledger_fit", env=junit_env())
+        cp = mutation_selfcheck("ledger_books_balance", env=junit_env())
         ok &= record(
             "74: mutation selfcheck drives a junit canary",
             cp.returncode == 0 and "went red" in out(cp),
@@ -1945,7 +1945,7 @@ def junit_scenarios() -> bool:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(
             '<testsuite name="fx.LedgerTest">'
-            '<testcase name="balanceIsYes" classname="fx.LedgerTest"/></testsuite>'
+            '<testcase name="booksBalance" classname="fx.LedgerTest"/></testsuite>'
         )
         try:
             cp = verify("full", junit_env(noreport=True))
@@ -2010,17 +2010,17 @@ def surefire_parser_scenario() -> bool:
         return path
 
     cases = [
-        ("failure message", f'<testcase classname="{fqn}" name="balanceIsYes"><failure message="expected yes">trace</failure></testcase>', (False, "expected yes")),
-        ("error message", f'<testcase classname="{fqn}" name="balanceIsYes"><error message="boom"/></testcase>', (False, "boom")),
-        ("skipped", f'<testcase classname="{fqn}" name="balanceIsYes"><skipped/></testcase>', (False, "test skipped")),
-        ("parameterized [1]", f'<testcase classname="{fqn}" name="balanceIsYes[1]"/>', (True, "")),
-        ("parameterized (String)", f'<testcase classname="{fqn}" name="balanceIsYes(String)"/>', (True, "")),
-        ("other class only", '<testcase classname="fx.OtherTest" name="balanceIsYes"/>', (False, "testcase balanceIsYes not in surefire report: test did not run")),
+        ("failure message", f'<testcase classname="{fqn}" name="booksBalance"><failure message="expected balanced">trace</failure></testcase>', (False, "expected balanced")),
+        ("error message", f'<testcase classname="{fqn}" name="booksBalance"><error message="boom"/></testcase>', (False, "boom")),
+        ("skipped", f'<testcase classname="{fqn}" name="booksBalance"><skipped/></testcase>', (False, "test skipped")),
+        ("parameterized [1]", f'<testcase classname="{fqn}" name="booksBalance[1]"/>', (True, "")),
+        ("parameterized (String)", f'<testcase classname="{fqn}" name="booksBalance(String)"/>', (True, "")),
+        ("other class only", '<testcase classname="fx.OtherTest" name="booksBalance"/>', (False, "testcase booksBalance not in surefire report: test did not run")),
     ]
     bad = []
     for label, body, want in cases:
         path = report(body)
-        got = contract_lib._surefire_outcome(path, fqn, "balanceIsYes")
+        got = contract_lib._surefire_outcome(path, fqn, "booksBalance")
         shutil.rmtree(path.parent, ignore_errors=True)
         if got != want:
             bad.append(f"{label}: got {got!r}, want {want!r}")

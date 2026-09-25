@@ -5,4 +5,4 @@
 - Export supports both CSV and JSON output formats.
 - Notify delivers messages by email through SMTP, with retries on failure.
 - `app/scheduler.py` runs the export job every night on a cron schedule.
-- Web state colours: green means yes, red means no, gray means unknown.
+- Web state colours follow the majority verdict: green means yes, red means no, gray means unknown.

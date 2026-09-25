@@ -45,7 +45,7 @@
 
 **Почему untracked тоже (D36).** `_git_ls_files(root, include_untracked=False)` по умолчанию отдаёт только трекаемый набор; `include_untracked=True` передаёт единственный вызывающий — banned-word scan в `full`. Без этого файл, ещё не прошедший `git add`, не попадал в скан вообще: гейт зелёный, слово уезжает в первый же коммит — то есть проверка молчит ровно в момент, когда её ещё дёшево починить. Остальные множества файлов не меняются: md-скан ссылок `STATUS.yaml#<id>` в `check_links` идёт по трекаемому набору намеренно (ссылка из неотслеживаемого черновика ничего не обещает), а coverage и status-raise guard строят свои списки сами (обход `coverage.roots` по диску, `git status --porcelain`) и untracked-файлы и так видят.
 
-**Следствие для CI (D61).** Кэш, который раннер восстанавливает внутрь checkout (`$CI_PROJECT_DIR/.pip-cache`, `node_modules` под `actions/cache`), — untracked-каталог, и метаданные сторонних пакетов в нём полны стоп-слов (`service-c`: 40 FAIL на первом реальном прогоне). Лечится не исключением в сканере, а `.gitignore`: `i9_install` собирает такие пути фактом `ci_cache_paths` / `ci_cache_unignored` и дописывает их на `--write`.
+**Следствие для CI (D61).** Кэш, который раннер восстанавливает внутрь checkout (`$CI_PROJECT_DIR/.pip-cache`, `node_modules` под `actions/cache`), — untracked-каталог, и метаданные сторонних пакетов в нём полны стоп-слов (`service-c` — обезличенное имя репозитория: 40 FAIL на первом реальном прогоне). Лечится не исключением в сканере, а `.gitignore`: `i9_install` собирает такие пути фактом `ci_cache_paths` / `ci_cache_unignored` и дописывает их на `--write`.
 
 Два непересекающихся набора:
 
@@ -54,7 +54,7 @@
 | **FAIL — идентичность** | `\bClaude\b`, `\bAnthropic\b`, `\bChatGPT\b`, `\bGPT-?\d`, `\bCopilot\b`, `\bLLM\b`, `Co-Authored-By`, `\bAI\b`, `"AI-assisted"`, `"AI-generated"`, `"coding agent"`, `"language model"` | fail | **регистрозависимо** (`\bAI\b` не матчит «Ai» или «ai» внутри обычного слова) |
 | **WARN — бузворды** | delve, leverage, comprehensive, robust, seamless, streamline, consolidate, modernize, enhanced, utilize, facilitate | warn | регистронезависимо |
 
-**Почему по намерению, а не по голому слову (D16).** Плоский `\b(agent|model)\b`-класс regex валит собственный легитимный технический контент — claim `sync_agent_retry_stub`, `component: "sync-agent Retrier"` из прототипного репозитория содержат банящуюся подстроку, будучи нормальными техническими именами. Гейт, который красит уже закоммиченный легитимный код, учит следующие сессии его обходить или отключать — тот же класс поражения, что decider-gate, только с другой стороны (ложное срабатывание вместо пропуска, spec §2.6). Поэтому:
+**Почему по намерению, а не по голому слову (D16).** Плоский `\b(agent|model)\b`-класс regex валит собственный легитимный технический контент — claim `webhook_user_agent_check`, `component: "webhook User-Agent check"` содержат банящуюся подстроку, будучи нормальными техническими именами. Гейт, который красит уже закоммиченный легитимный код, учит следующие сессии его обходить или отключать — тот же класс поражения, что decider-gate, только с другой стороны (ложное срабатывание вместо пропуска, spec §2.6). Поэтому:
 
 - голые `\bagent\b`/`\bmodel\b` **не сканируются вообще** — не входят ни в FAIL, ни в WARN набор (User-Agent, ssh-agent, `models.py` — легитимные, частые);
 - совпадение, целиком укладывающееся в уже объявленное в этом же `STATUS.yaml` значение `id`/`component`/`meta.repo`, пропускается автоматически;
@@ -92,7 +92,7 @@
 
 ## 6. Assertion-density lint
 
-Дешёвая, всегда включённая (`sync` + `full`) структурная проверка class'а «check без зубов»: AST-обход каждого уникального файла, на который указывает хотя бы один `check_kind: pytest`-claim, поиск `FunctionDef`/`AsyncFunctionDef` с именем `test_*`, подсчёт узлов `ast.Assert`, вызовов вида `self.assert*(...)` и, отдельно, `with pytest.raises(...)`/`with pytest.warns(...)`/`self.assertRaises(...)`/`self.assertWarns(...)` внутри тела функции — тест, характеризующий `stub`-claim через ожидаемое исключение (см. `beta_worker_stub` в `selftest/run.py`), реально доказывает поведение и не должен считаться «без зубов» только потому что в нём нет буквального `assert`. Ноль — **WARN** `<path>:<lineno>: <test_name> has zero assertions`.
+Дешёвая, всегда включённая (`sync` + `full`) структурная проверка class'а «check без зубов»: AST-обход каждого уникального файла, на который указывает хотя бы один `check_kind: pytest`-claim, поиск `FunctionDef`/`AsyncFunctionDef` с именем `test_*`, подсчёт узлов `ast.Assert`, вызовов вида `self.assert*(...)` и, отдельно, `with pytest.raises(...)`/`with pytest.warns(...)`/`self.assertRaises(...)`/`self.assertWarns(...)` внутри тела функции — тест, характеризующий `stub`-claim через ожидаемое исключение (см. `beta_worker_stub` в `selftest/run.py`), реально доказывает поведение и не должен считаться «без зубов» только потому что в нём нет буквального `assert`. Ноль — **WARN** `<check node id>: test has no assertions`; для claim'а, которого нет в базовой версии, — FAIL (новый claim обязан прийти с check'ом, способным упасть).
 
 **Новый claim — FAIL, а не WARN.** Severity зависит от того, был ли claim в базовой версии `STATUS.yaml` (та же база, что у status-raise guard'а, §14 — обе проверки берут её через один общий помощник, чтобы не разойтись в том, что значит «до этого изменения»). Claim, появившийся в этом изменении и сразу указывающий на тест с нулём ассертов, — FAIL `<check>: test has no assertions -- a new claim must ship a check that can fail`: контракт пишется здесь и сейчас, и требовать от него зубов дешевле всего именно сейчас. Тот же тест под claim'ом, который уже лежит в базе, остаётся WARN — иначе включение проверки покрасило бы весь накопленный долг разом. База не читается (нет `GT_BASE_REF`, первый коммит, git недоступен) → WARN для всех, не FAIL: неизвестно, какие claim'ы новые.
 
@@ -118,7 +118,7 @@ Canary нужен в каждом coverage root с implemented/partial (§19). �
 
 **Протухший байткод — источник ложного FAIL (D37).** pytest переписывает тестовые модули под assert-rewrite и кэширует результат в `__pycache__`, а валидность кэша определяет по mtime исходника — с точностью до секунды. Мутация, прогон и откат укладываются в ту же секунду, поэтому следующий запуск подхватывает `.pyc`, собранный по уже не существующему на диске тексту, и печатает провал теста, которого нет: на прогоне так «упал» `test_removed_helpers`, зелёный при ручном запуске. Отсюда три меры разом — `PYTHONDONTWRITEBYTECODE=1` в env каждого дочернего процесса, `-p no:cacheprovider` у pytest, удаление `__pycache__` после отката. То же правило действует для пробы, которая внутри себя гоняет pytest (`templates/probes/example_probe.py`): проба-обёртка обязана ставить те же env и флаг, иначе унаследует ту же ложную красноту.
 
-**Порядок в I.10: selfcheck ДО fleet-probe, не параллельно (урок прогона).** Selfcheck на секунды меняет содержимое исходников — ровно тех, которые в это же время читают навигаторы fleet-probe. Запущенные параллельно, навигаторы видят мутированное значение (на прогоне — `RETRY_DAYS = 7` у цели 1) и отвечают неверно: провал приёмки, вызванный измерительным инструментом, а не репозиторием. Фазы выстраиваются последовательно — mutation selfcheck отработал, `git status --porcelain` пуст, только после этого стартуют навигаторы.
+**Порядок в I.10: selfcheck ДО fleet-probe, не параллельно (урок прогона).** Selfcheck на секунды меняет содержимое исходников — ровно тех, которые в это же время читают навигаторы fleet-probe. Запущенные параллельно, навигаторы видят мутированное значение (например, `DAYS_BEFORE_DUE = 30` вместо 3 у канарейки `invoice_reminder_sends_before_due`) и отвечают неверно: провал приёмки, вызванный измерительным инструментом, а не репозиторием. Фазы выстраиваются последовательно — mutation selfcheck отработал, `git status --porcelain` пуст, только после этого стартуют навигаторы.
 
 ## 8. Как pytest/Go/TS/Java-мосты вызывают верификатор
 
@@ -150,7 +150,7 @@ Canary нужен в каждом coverage root с implemented/partial (§19). �
 | `1` | хотя бы один FAIL |
 | `3` | `STATUS.yaml` отсутствует или не парсится (`yaml.safe_load` упал / нет файла) — отличается от `1`, потому что это поломка самого контракта, не расхождение с кодом |
 
-**Порядок разбора FAIL** (практический чек-лист): 1) прочитать `claim_id` — если `"-"`, искать причину в сообщении (путь файла, банворд); 2) свериться с `references/schema.md` по типу сообщения (`missing X for kind=Y` → §3.1, `orphan code` → §5, `check not collectible` → §4.2, `debt marked resolved but...` → §10); 3) починить на стороне, которая реально разошлась — если разошёлся код, чинить код (D12, только когда сломано относительно самого себя); если разошёлся контракт — чинить `STATUS.yaml`; 4) перезапустить `--mode=sync` локально перед коммитом, `--mode=full` — по расписанию `audit`/CI.
+**Порядок разбора FAIL** (практический чек-лист): 1) прочитать `claim_id` — если `"-"`, искать причину в сообщении (путь файла, банворд); 2) свериться с `references/schema.md` по типу сообщения (`missing X for kind=Y` → §3.1, `is not covered by any claim` / `path ... does not exist` → §5, `... not found in <file>` → §4.2, `debt marked resolved while...` → §10); 3) починить на стороне, которая реально разошлась — если разошёлся код, чинить код (D12, только когда сломано относительно самого себя); если разошёлся контракт — чинить `STATUS.yaml`; 4) перезапустить `--mode=sync` локально перед коммитом, `--mode=full` — по расписанию `audit`/CI.
 
 ## 10. `Issue` — форма одной находки
 
@@ -264,37 +264,37 @@ SC-b без изменений: authoring-time доказательство «ch
 **Пример 1 — фантомный check (ловит `check_collectible`):**
 ```
 $ python3 tools/ground_truth/verify.py --mode=sync
-[FAIL] invoice_reminder_sends_before_due: check not collectible: test_sends_three_days_before_due not found in tests/test_invoice_reminder.py
+[FAIL] invoice_reminder_sends_before_due : tests/test_invoice_reminder.py::TestInvoiceReminder::test_sends_three_days_before_due: 'test_sends_three_days_before_due' not found in tests/test_invoice_reminder.py
 ```
 Тест переименовали, `check:` в `STATUS.yaml` не обновили. Чинится правкой `check:` на актуальный node id (контракт разошёлся, не код).
 
-**Пример 2 — orphan-код (ловит `check_coverage`):**
+**Пример 2 — orphan-код (ловит `check_coverage`, FAIL в `--mode=full`; в `sync` та же находка — WARN):**
 ```
-[FAIL] -: orphan code, no claim covers handlers/unsubscribe.py
+[FAIL] - : handlers/refund_commands.py is not covered by any claim
 ```
 Новый обработчик добавили, claim не завели — новый компонент вне контракта. Чинится добавлением claim'а (§5.4 в `references/schema.md`).
 
 **Пример 3 — debt против правила resolved-while-stub (ловит `check_links`):**
 ```
-[FAIL] report_worker_health_needs_implementation: debt marked resolved but claim report_worker_health_wiring is still 'stub'
+[FAIL] report_worker_health_needs_implementation : debt marked resolved while claim 'report_worker_health_wiring' is still stub
 ```
 Кто-то пометил `debt.state: resolved`, не тронув `claims[...].status`. Чинится либо откатом `state` на `open`/`accepted`, либо реальным доведением claim'а до `implemented`/`design-only` — но не одной правкой `debt.state` без второй.
 
 **Пример 4 — банворд (ловит `check_no_banned_words`, только `--mode=full`):**
 ```
-[FAIL] -: services/notify.py:14: banned token 'Copilot'
+[FAIL] - : services/invoice_reminder.py:14: banned word 'Copilot'
 ```
 Комментарий в коде упоминает происхождение куска логики. Чинится удалением упоминания либо, если это ложное срабатывание (например слово внутри строкового литерала теста на детектор), построчным `# gt-allow: <причина>`.
 
-**Пример 5 — WARN, не FAIL (assertion density):**
+**Пример 5 — WARN, не FAIL (assertion density, claim уже был в базовой версии):**
 ```
-[WARN] -: tests/test_delivery.py:22: test_sends_email has zero assertions
+[WARN] order_confirmation_email : tests/test_order_emails.py::test_sends_confirmation: test has no assertions
 ```
-Не блокирует ни `sync`, ни `full` — сигнал, что конкретный тест не может ничего провалить. Не требует немедленного фикса, но обесценивает `check`, который на него ссылается — стоит доиграть на ближайшем `audit`.
+Для существующего claim'а не блокирует ни `sync`, ни `full` (в `sync` WARN'ы свёрнуты в счётчик, список — `--show-warn`) — сигнал, что конкретный тест не может ничего провалить. Для claim'а, которого нет в базовой версии, та же находка — FAIL: новый claim обязан прийти с check'ом, способным упасть. Не требует немедленного фикса, но обесценивает `check`, который на него ссылается — стоит доиграть на ближайшем `audit`.
 
 **Пример 6 — повышение статуса без усиления check'а (ловит `check_status_raise`, оба режима):**
 ```
-[FAIL] beta_worker_stub : status raised stub -> implemented but check target(s) tests/test_beta.py unchanged since HEAD; strengthen the check in the same change
+[FAIL] report_worker_health_wiring : status raised stub -> implemented but check target(s) tests/test_report_worker_health.py unchanged since HEAD; strengthen the check in the same change
 ```
 Статус подняли, тест не тронули. Чинится либо усилением теста в том же изменении (тогда target попадает в changed set), либо возвратом статуса — но не одной правкой `STATUS.yaml`.
 
