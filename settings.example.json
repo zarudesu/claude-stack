@@ -1,6 +1,20 @@
 {
   "promptCacheTtl": "1h",
   "autoCompactWindow": 200000,
+  "autoContinueAtUsageLimit": false,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "effortLevel": "high",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-fable-5-1": {
+      "effortLevel": "xhigh"
+    }
+  },
   "env": {
     "MAX_MCP_OUTPUT_TOKENS": "40000",
     "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
@@ -11,7 +25,9 @@
     "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com",
     "OTEL_EXPORTER_OTLP_HEADERS": "<basic-auth-redacted>",
     "OTEL_LOG_USER_PROMPTS": "1",
-    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus",
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "100"
   },
   "skillOverrides": {
     "ab-testing": "off",
@@ -63,7 +79,10 @@
     "image": "off",
     "grill-me": "off",
     "grill-with-docs": "off",
-    "ui-ux-pro-max": "off"
+    "ui-ux-pro-max": "off",
+    "attribution": "off",
+    "events": "off",
+    "influencer-marketing": "off"
   },
   "hooks": {
     "UserPromptSubmit": [
@@ -109,15 +128,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/guard-destructive.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
             "command": "$HOME/.claude/hooks/protected-paths-guard-bash.sh"
           }
         ]
@@ -128,15 +138,6 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/protected-paths-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Read|Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/hooks/guard-sensitive-files.sh"
           }
         ]
       }
@@ -185,7 +186,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -f .claude/pm/_active.md ] && { echo '## Active work (.claude/pm/_active.md)'; cat .claude/pm/_active.md; } || true"
+            "command": "[ -f .claude/pm/_active.md ] && bash \"$HOME/.claude/scripts/active-router.sh\" || true"
           },
           {
             "type": "command",
@@ -228,5 +229,34 @@
     "type": "command",
     "command": "~/.claude/statusline-combined.sh",
     "padding": 0
+  },
+  "enabledPlugins": {
+    "claude-mem@thedotmack": true,
+    "security-guidance@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": true,
+    "claude-hud@claude-hud": true,
+    "codex@openai-codex": true,
+    "i-have-adhd@i-have-adhd": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-hud": {
+      "source": {
+        "source": "github",
+        "repo": "jarrodwatts/claude-hud"
+      }
+    },
+    "openai-codex": {
+      "source": {
+        "source": "github",
+        "repo": "openai/codex-plugin-cc"
+      }
+    },
+    "i-have-adhd": {
+      "source": {
+        "source": "github",
+        "repo": "ayghri/i-have-adhd"
+      }
+    }
   }
 }

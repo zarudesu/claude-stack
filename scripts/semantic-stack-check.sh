@@ -1,5 +1,5 @@
 #!/bin/bash
-# Разовая проверка семантического стека: Milvus (контейнер + реальные запросы) и grepai watcher.
+# Разовая проверка семантического стека: Milvus (контейнер + реальные запросы) и свежесть grepai-индекса.
 # exit 0 — всё живо; exit 1 — есть поломки (список в stdout).
 # --quiet: печатать только поломки.
 set -u
@@ -45,15 +45,20 @@ else
   ok "Ollama отвечает, модель qwen3-embedding:0.6b на месте"
 fi
 
-# --- grepai watcher ---
-if ! pgrep -f "grepai watch" >/dev/null 2>&1; then
-  fail "grepai watcher не бежит (поднять: cd ~/Projects && grepai watch --background)"
+# --- grepai index ---
+# Постоянного watcher нет намеренно: `watch --background` (0.37) убивает ребёнка, если 2.9 GB gob не загрузился за 30 с,
+# а живой watcher держит несколько GB RAM. Индекс освежает ~/.claude/scripts/grepai-resync.sh (launchd, ежедневно 05:30).
+GOB="$HOME/Projects/.grepai/index.gob"
+if [ ! -s "$GOB" ]; then
+  fail "grepai: индекса нет ($GOB) — полная пересборка: ~/.claude/scripts/grepai-resync.sh (~2.5 ч)"
+elif pgrep -f "grepai watch" >/dev/null 2>&1; then
+  ok "grepai: идёт resync (pid $(pgrep -f 'grepai watch' | head -1))"
 else
-  # процесс есть — сверимся с его собственным статусом
-  if (cd "$HOME/Projects" && grepai watch --status 2>/dev/null | grep -q "Status: running"); then
-    ok "grepai watcher running"
+  age_h=$(( ( $(date +%s) - $(stat -f %m "$GOB") ) / 3600 ))
+  if [ "$age_h" -le 48 ]; then
+    ok "grepai индекс свежий (${age_h} ч, $(du -h "$GOB" | cut -f1))"
   else
-    fail "grepai: процесс есть, но --status не подтверждает running (зомби? pkill -f 'grepai watch' и поднять заново)"
+    fail "grepai индекс протух (${age_h} ч) — запустить ~/.claude/scripts/grepai-resync.sh"
   fi
 fi
 

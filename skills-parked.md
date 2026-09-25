@@ -54,6 +54,8 @@
 - **social** — "When the user wants help creating, scheduling, or optimizing social media content for LinkedIn, Twitter/X, Instagram, TikTok, Facebook, or 
 - **ui-ux-pro-max** — "UI/UX design intelligence for web and mobile. Includes 50+ styles, 161 color palettes, 57 font pairings, 161 product types, 99 UX guideline
 - **video** — "When the user wants to create, generate, or produce video content using AI tools or programmatic frameworks. Also use when the user mention
+- **events** — event marketing: webinars, conferences, sponsorships, speaking, event ROI (added 2026-09-20, upstream 1.0.0)
+- **influencer-marketing** — creator/influencer programs, sponsorships, UGC, affiliate-creator deals (added 2026-09-20, upstream 1.1.0)
 
 ## Дизайн-пак taste-skill (Leonxlnx/taste-skill, установлен 2026-08-21, пассивный)
 `disable-model-invocation: true` — только ручной вызов `/<name>`, фоновой цены нет. Подключать в проектах с дизайном сайтов:
