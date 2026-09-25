@@ -251,8 +251,8 @@ def _harvest_ssh_docker(cmd, facts):
 
 CMD_ANALYSIS_MAX_CHARS = 8000
 RESULT_ANALYSIS_MAX_CHARS = 4000
-# v_usefulness #1: потерянный факт в trading-bots/c49b0d3e — соответствие
-# хостового пути и пути внутри контейнера (/docker/trading-bots/arb-state ->
+# v_usefulness #1: потерянный факт в одной из сессий — соответствие
+# хостового пути и пути внутри контейнера (/docker/<app>/state ->
 # /app/output). Ни один из прежних сборщиков не смотрел ни на -v/--volume,
 # ни на volumes: в compose, ни на вывод команд.
 _DOCKER_VOL_RE = re.compile(r'(?:-v|--volume)[= ]([./~][^\s:]*|/[^\s:]*):(/[^\s:,]*)')

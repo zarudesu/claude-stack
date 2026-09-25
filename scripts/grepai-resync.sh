@@ -4,8 +4,9 @@
 # and a permanently running watcher pins several GB of RAM, so we run the foreground watcher
 # just long enough to finish the incremental scan, then stop it.
 export LC_ALL=C
-ROOT=~/Projects
+ROOT=${PROJECTS_DIR:-$HOME/Projects}
 LOG=~/Library/Logs/grepai/grepai-resync-$(date +%Y-%m-%d-%H%M).log
+mkdir -p "${LOG:h}"
 MAX=${GREPAI_RESYNC_MAX:-14400}   # seconds; full rebuild takes ~2.5 h, incremental sync minutes
 cd "$ROOT" || exit 1
 if pgrep -f "grepai watch" >/dev/null; then echo "grepai watch already running (pid $(pgrep -f 'grepai watch' | head -1))"; exit 0; fi

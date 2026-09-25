@@ -19,7 +19,7 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 [ -z "$cmd" ] && exit 0
 
 esc_home="${HOME//./\\.}"
-home="(${esc_home}/\.claude|~/\.claude|\\\$HOME/\.claude)"
+home="(${esc_home}/\.claude|~/\.claude|\"?\\\$\\{?HOME\\}?\"?/\.claude)"
 prot="${home}/(agents|skills|hooks)(/[^[:space:];|&'\"]*)?|${home}/settings\.json[^[:space:];|&'\"]*|${home}/CLAUDE\.md"
 P="(${prot})"
 Q="['\"]?"
