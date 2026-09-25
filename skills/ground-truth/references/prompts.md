@@ -83,7 +83,7 @@ Return JSON: {"files": [{"path","bytes","purpose_one_line"}, ...],
 **Вход:** `{{REPO_ROOT}}`, список доков от finder-inventory.
 **Жёсткие правила:** каждое утверждение — с точной цитатой + `file:line`; не оценивать истинность (это работа reconcile/adversarial), только собрать; не заходить в `docs/_human/**`.
 **Выходная схема:** `claims_found: [{quote, file, line, claim, hint, source}]`, `written_to: path`; `source` — одно из `head-doc`, `code-comment`, `ci-config`. Должна проходить валидацию `pipeline/schemas/claims.schema.json`.
-**Пример:** `{"quote": "renewal reminders are sent 3 days before expiry", "file": "docs/billing.md", "line": 42, "claim": "renewal reminders sent 3 days before expiry", "hint": "services/renewal_reminder_service.py", "source": "head-doc"}`.
+**Пример:** `{"quote": "invoice reminders are sent 3 days before the due date", "file": "docs/billing.md", "line": 42, "claim": "invoice reminders sent 3 days before the due date", "hint": "services/invoice_reminder.py", "source": "head-doc"}`.
 
 ```
 Read every doc in {{REPO_ROOT}} listed in {{INVENTORY}} except
@@ -112,7 +112,7 @@ Return JSON: {"claims_found": [{"quote","file","line",
 **Вход:** `{{REPO_ROOT}}`, `{{COVERAGE_ROOTS}}`.
 **Жёсткие правила:** только код под `coverage.roots`; для каждого компонента — реальный путь к entry point, не догадка; список импортёров — сырьё для будущих `edges`, не готовые edges (пробу к ним пишет отдельная механическая фаза).
 **Выходная схема:** `components: [{component, root, entry_point, language, existing_tests: [...], importers: [...]}]`, `orphan_files: [...]`, `written_to: path`. Должна проходить валидацию `pipeline/schemas/codemap.schema.json`.
-**Пример:** `{"component": "renewal reminder service", "root": "services", "entry_point": "services/renewal_reminder_service.py", "language": "python", "existing_tests": ["tests/test_renewal_reminder_service.py"], "importers": ["handlers/subscription_commands.py"]}`.
+**Пример:** `{"component": "invoice reminder service", "root": "services", "entry_point": "services/invoice_reminder.py", "language": "python", "existing_tests": ["tests/test_invoice_reminder.py"], "importers": ["handlers/order_commands.py"]}`.
 
 ```
 Map every component under {{COVERAGE_ROOTS}} in {{REPO_ROOT}}: a short
@@ -140,7 +140,7 @@ Return JSON: {"components": [{"component","root","entry_point",
 **Вход:** `{{REPO_ROOT}}`.
 **Жёсткие правила:** искать `TODO`/`FIXME`/`NotImplementedError`/отключённые тесты (`@skip`, `.skip(`)/замоканное там, где ожидается прод-путь/всегда-true-false ветки; каждая находка — с цитатой, без вывода «значит это заглушка» (решает reconcile); литерал, похожий на ключ или пароль (private key, длинный токен, креды в константе) в tracked-коде — тоже кандидат в `debt`, независимо от того, живой это путь или мёртвый, и независимо от того, что про файл говорят доки (урок 22: literal private key в корневом скрипте прошёл мимо, потому что файл был закрыт claim'ом `dead_weight`); само значение секрета не цитировать — `path:line` и тип литерала; не предлагать `meta.banned_words.exclude` для `docs/_human/*` — D16-скан этот каталог пропускает сам (`_under_human_docs`), лишний exclude потом висит never-matched; сканирование — по всему дереву репозитория, поэтому пропускать `STATUS.yaml`, `tools/ground_truth/`, `.claude/` и `docs/_human/` (лессон п.13, правило выше) — иначе finder находит собственную инфраструктуру контракта, а не долг в продуктовом коде.
 **Выходная схема:** `suspects: [{path, line, kind, description, severity}]`, `written_to: path`; `severity` — одно из `low`, `medium`, `high` (литерал-секрет — всегда минимум `high`). Должна проходить валидацию `pipeline/schemas/debt-candidates.schema.json`.
-**Пример:** `{"path": "services/homenet_health.py", "line": 18, "kind": "not-implemented", "description": "raise NotImplementedError; wired into alert path per codemap", "severity": "medium"}`.
+**Пример:** `{"path": "services/report_worker_health.py", "line": 18, "kind": "not-implemented", "description": "raise NotImplementedError; wired into alert path per codemap", "severity": "medium"}`.
 
 ```
 Scan {{REPO_ROOT}} for stub/debt signals: TODO, FIXME,
@@ -180,7 +180,7 @@ Return JSON: {"suspects": [{"path","line","kind","description",
 **Вход:** срез finder B/C/D по `{{COMPONENT}}` (только этот компонент — параллельно по непересекающимся).
 **Жёсткие правила:** evidence в обе стороны обязателен (что говорит за статус, что против); черновой `check` должен указывать на существующий или предлагаемый к написанию тест, не на воздух; план «был ли check хоть раз красным» обязателен — если ответ «нет», это явно помечается, а не замалчивается (нужно adversarial-проходу и authoring-time доказательству, SC-b); `note` опирается на код или док с устойчивым якорем (путь + имя функции, заголовок раздела), а не на `CLAUDE.md:N` — I.8 переписывает роутер, и номера строк протухают; внутри YAML plain-скаляра нельзя «: » — верификатор даёт exit 3, писать через «;» или «,».
 **Выходная схема:** `{id, component, kind, status, path, check_kind, check_draft, note, evidence_for: [...], evidence_against: [...], was_check_ever_red_plan}`.
-**Пример:** `{"id": "renewal_reminder_sends_before_expiry", "status": "implemented", "was_check_ever_red_plan": "flip DAYS_BEFORE_EXPIRY to 30, expect test_sends_three_days_before_expiry to fail"}`.
+**Пример:** `{"id": "invoice_reminder_sends_before_due", "status": "implemented", "was_check_ever_red_plan": "flip DAYS_BEFORE_DUE to 30, expect test_sends_three_days_before_due to fail"}`.
 
 ```
 You have doc claims, a code map entry, and debt suspects for exactly one
@@ -210,7 +210,7 @@ Return JSON: {"id","component","kind","status","path","check_kind",
 **Вход:** черновой claim из reconcile + доступ к тому же коду (read-only).
 **Жёсткие правила:** асимметричное правило (spec §3.1/I.3) — эта роль обязательна (3-vote), когда claim ПОВЫШАЕТ уверенность (`stub/absent` → `implemented/partial`) или влечёт правку кода; при понижении уверенности одного прохода defender-стороны достаточно, prosecutor не вызывается. Требовать `check` реально запускаемый и ассертящий текущее поведение, не факт своего существования.
 **Выходная схема:** `{claim_id, verdict: challenge|accept, findings: [...], counter_evidence: [...]}`.
-**Пример:** `{"claim_id": "homenet_health_probe_wiring", "verdict": "challenge", "findings": ["check imports the module but never calls the function under test"]}`.
+**Пример:** `{"claim_id": "report_worker_health_wiring", "verdict": "challenge", "findings": ["check imports the module but never calls the function under test"]}`.
 
 ```
 Attack this draft claim: {{DRAFT_CLAIM}}. Your job is to find reasons the
@@ -236,7 +236,7 @@ Return JSON: {"claim_id","verdict","findings":[...],
 **Вход:** тот же черновой claim, БЕЗ вывода prosecutor (независимость голосов).
 **Жёсткие правила:** те же условия обязательности, что у prosecutor (3-vote при повышении уверенности/code-fix); работать вслепую относительно другого голоса до judge-synthesis, иначе 3-vote вырождается в один голос с двумя подписями.
 **Выходная схема:** `{claim_id, verdict: accept|revise, rebuttal_or_confirmation: [...]}`.
-**Пример:** `{"claim_id": "homenet_health_probe_wiring", "verdict": "revise", "rebuttal_or_confirmation": ["status should be stub, not partial -- function body is one raise statement"]}`.
+**Пример:** `{"claim_id": "report_worker_health_wiring", "verdict": "revise", "rebuttal_or_confirmation": ["status should be stub, not partial -- function body is one raise statement"]}`.
 
 ```
 Independently evaluate this draft claim: {{DRAFT_CLAIM}}. You do not see
@@ -255,9 +255,9 @@ Return JSON: {"claim_id","verdict","rebuttal_or_confirmation":[...]}.
 **Роль:** батч 5–8 claim'ов → финальный статус/check + маршрут.
 **Модель:** opus, effort xhigh (D34 — в Workflow-скрипте model/effort передаются явно; fable по standing permission D5/D10 остаётся доступен только прямым вызовом Agent tool).
 **Вход:** для каждого claim'а в батче — reconcile-черновик + prosecutor-вывод + defender-вывод (когда 3-vote применялся) либо один senior-проход (когда нет).
-**Жёсткие правила:** батчить 5–8, не по одному (координационные издержки); при разногласии prosecutor/defender — решает сам, не отбрасывает молча; маршрут ровно один из трёх на claim; пара claim'ов с одинаковым `path` И одинаковым `check` при разных `status` — дефект пакета (урок 20: `graph_guard` partial и `migration_graph_validator` implemented на один и тот же скрипт): либо merge в один claim, либо у обоих обязательная перекрёстная заметка, почему один и тот же check даёт разные статусы; `note` не цитирует `CLAUDE.md:N` (I.8 переписывает роутер, ссылки протухают — 4 штуки за прогон) и не содержит «: » внутри plain-скаляра (иначе верификатор даёт exit 3, писать через «;» или «,»).
+**Жёсткие правила:** батчить 5–8, не по одному (координационные издержки); при разногласии prosecutor/defender — решает сам, не отбрасывает молча; маршрут ровно один из трёх на claim; пара claim'ов с одинаковым `path` И одинаковым `check` при разных `status` — дефект пакета (урок 20: `schema_graph_check` partial и `schema_validator` implemented на один и тот же скрипт): либо merge в один claim, либо у обоих обязательная перекрёстная заметка, почему один и тот же check даёт разные статусы; `note` не цитирует `CLAUDE.md:N` (I.8 переписывает роутер, ссылки протухают — 4 штуки за прогон) и не содержит «: » внутри plain-скаляра (иначе верификатор даёт exit 3, писать через «;» или «,»).
 **Выходная схема:** `results: [{claim_id, final_status, final_check_kind, final_check, route: CODE_FIX_CANDIDATE|DOC_FIX_ONLY|ESCALATE, reason}]`.
-**Пример:** `{"claim_id": "homenet_health_probe_wiring", "final_status": "stub", "route": "DOC_FIX_ONLY", "reason": "code already honestly a stub, only docs overclaimed"}`.
+**Пример:** `{"claim_id": "report_worker_health_wiring", "final_status": "stub", "route": "DOC_FIX_ONLY", "reason": "code already honestly a stub, only docs overclaimed"}`.
 
 ```
 You have {{N}} draft claims (5-8), each with reconcile evidence and one or
@@ -289,7 +289,7 @@ Return JSON: {"results": [{"claim_id","final_status","final_check_kind",
 **Вход:** один claim с route=CODE_FIX_CANDIDATE + judge's reason.
 **Жёсткие правила (D12):** чинится только то, что разошлось с самим собой (красный тест, мёртвая проводка, отсутствующий тест под уже заявленный `check`); **запрещено** имплементировать логику заглушки, чтобы она стала настоящей реализацией — такое решение уходит в Outcome, не в код; фикс механический и локальный; сначала красный тест, потом минимальный фикс, потом зелёный; `git diff` читает main лично после. **Проба не зависит от машины автора (D61):** внешний бинарь (curl, sha256sum, ansible, ssh) — `shutil.which` → exit 77 либо stub на PATH; проба, собирающая все tracked тест-файлы, тянет в CI job import-зависимости каждого из них; проба, меряющая origin настройки, чистит ambient env от одноимённых переменных (`ANSIBLE_*`). **Проба не читает чужие worktree'ы:** обход дерева репозитория — только через `iter_repo_files` из `example_probe.py` либо явный skip тех же каталогов (`.git .worktrees .venv node_modules __pycache__`) на любом уровне вложенности; проба, читающая `.worktrees/`, — дефект, а не флейк. **Бюджет на фазу (D24):** не больше одного characterization-теста на implemented/partial claim, потолок ~25 новых тестов за прогон — main считает по ходу фазы; claim, для которого честный тест несоразмерно дорог, получает wiring-only пробу вместо теста, либо остаётся без guard'а с явной `debt`-записью «no guard», не бесконтрольным разрастанием тестов сверх бюджета. **Canary (D20):** `mutation.find/replace` обязана ломать ровно то, что читает `check` этого claim'а — значение или ветку, от которой зависит ассерт, а не соседнюю строку, импорт или комментарий; после патча тест обязан краснеть на своём ассерте, и это проверяется фактическим прогоном `gt_mutation_selfcheck.py`, а не рассуждением. Мутация, которую тест не замечает, — FAIL брифа, а не «canary есть» (урок 4: 4 беззубых мутации за один прогон).
 **Выходная схема:** `{claim_id, red_test_before, fix_description, files_changed: [...], green_test_after, forbidden_action_taken: bool}`.
-**Пример:** `{"claim_id": "matrix_freshness_gate_wiring", "fix_description": "forward now/stale_after_seconds into latest_verdicts call", "forbidden_action_taken": false}`.
+**Пример:** `{"claim_id": "cache_freshness_check_wiring", "fix_description": "forward now/max_age_seconds into latest_results call", "forbidden_action_taken": false}`.
 
 ```
 Fix exactly one thing for claim {{CLAIM_ID}}: {{JUDGE_REASON}}. Confirm
@@ -326,7 +326,7 @@ Return JSON: {"claim_id","red_test_before","fix_description",
 **Вход:** один документ + список claim'ов, которых он касается (final status/check из judge-synthesis).
 **Жёсткие правила:** один документ на агента (изоляция ошибки); переписывается прямо утверждение, не добавляется рядом «на самом деле...»; ссылка на id вместо повторения статуса текстом, где уместно; не трогает файлы за пределами своего документа; правки только внутри `{{FIXER_EDITABLE}}` из общего scope-блока — того же списка, который видит reviewer; находка вне списка идёт в отчёт с префиксом `out-of-scope:`, а не в правку, и раунд не валит; после двух раундов FAIL по одному и тому же пункту петля закрывается, пункт уходит владельцу на override; перенос или удаление файла — только `git mv`/`git rm`, индекс после фазы обязан совпадать с рабочим деревом (урок 13: голый `mv` оставил 159 записей ` D` и 34 `A` в `git status`); `meta.banned_words.exclude` для `docs/_human/*` не предлагать — D16-скан этот каталог пропускает сам (`_under_human_docs`), лишний exclude потом висит never-matched.
 **Выходная схема:** `{doc_path, changes: [{old_text, new_text}], claims_referenced: [...]}`.
-**Пример:** `{"doc_path": "docs/billing.md", "changes": [{"old_text": "monitoring is live", "new_text": "see STATUS.yaml#homenet_health_probe_wiring"}]}`.
+**Пример:** `{"doc_path": "docs/billing.md", "changes": [{"old_text": "monitoring is live", "new_text": "see STATUS.yaml#report_worker_health_wiring"}]}`.
 
 ```
 Edit exactly one file: {{DOC_PATH}}. It makes claims about
@@ -381,7 +381,7 @@ Return JSON: {"doc_path","verdict","reason_one_line",
 **Вход:** выборка 15–20 нормативных утверждений из старых доков (до правок) + итоговое состояние (claims + новые доки + карантин-список).
 **Жёсткие правила:** ровно 4 вердикта на утверждение — `keep-inline` / `moved-to:<path>` / `link` / `drop+причина`; default-FAIL при сомнении, не «наверное ок»; читает сами итоговые файлы, не полагается на mapping-таблицу drafting-агента как на источник истины; scope проверки и scope правок берутся из общего scope-блока дословно теми же значениями, что у fixer'а (скелет 10) — FAIL не выставляется по пункту, который fixer не имеет права трогать: такой пункт помечается в `target_or_reason` префиксом `out-of-scope:`; два раунда FAIL по одному и тому же пункту закрывают петлю, пункт уходит владельцу на override (урок 14: reviewer гонял секреты по `*.yml`/`*.sh` вне `app/`, fixer имел право только на `md` + `STATUS.yaml` — два раунда впустую).
 **Выходная схема:** `sampled: [{old_claim_quote, old_location, verdict, target_or_reason}]`, `default_fail_count`.
-**Пример:** `{"old_claim_quote": "renewal reminders sent 3 days before", "verdict": "link", "target_or_reason": "STATUS.yaml#renewal_reminder_sends_before_expiry"}`.
+**Пример:** `{"old_claim_quote": "invoice reminders sent 3 days before", "verdict": "link", "target_or_reason": "STATUS.yaml#invoice_reminder_sends_before_due"}`.
 
 ```
 You did not write any of the drafts. For each of these {{N}} normative
@@ -409,7 +409,7 @@ Return JSON: {"sampled": [{"old_claim_quote","old_location","verdict",
 **Вход:** одна фраза «I want to change {{X}}» на одну из 5 разных зон репозитория; доступ read-only к репозиторию как есть после init/audit.
 **Жёсткие правила:** не подсказывать номер claim'а заранее; агент обязан пройти маршрут сам (router → contract grep → код); считать и перечислять прочитанные файлы по единому правилу подсчёта — чтение это открытие файла read-инструментом; стартовые `CLAUDE.md` и rules-файл, на который он указывает, не в счёт (оба загружаются автоматически, D35), `grep`/`rg` по файлу и запуск `blast_radius.py` тоже не в счёт (но перечисляются в `files_read` с суффиксом `(grep)`/`(tool)`), claim со списком путей = одно чтение, сколько бы файлов из списка ни открыли, и первым открывается тот, что назван в `note` (урок 15: иначе бюджет ≤3 чтений ломается на первом же multi-path claim'е); на одном файле может висеть несколько claim'ов с разными статусами (урок 16: live/dead, payment/refund, poller/not_wired) — выбирается тот, чей concern совпадает с задачей, а не первый попавшийся с этим `path`.
 **Выходная схема:** `{target, claim_id, path, status, blast_radius: [...], files_read_count, files_read: [...]}`.
-**Пример:** `{"target": "renewal reminder timing", "claim_id": "renewal_reminder_sends_before_expiry", "files_read_count": 3}`.
+**Пример:** `{"target": "invoice reminder timing", "claim_id": "invoice_reminder_sends_before_due", "files_read_count": 3}`.
 
 ```
 You have no memory of any prior session on this repo. Starting point:
@@ -442,7 +442,7 @@ Return JSON: {"target","claim_id","path","status","blast_radius":[...],
 **Вход:** 5 ответов навигаторов + собственный (грейдера) прогон `blast_radius.py <path>` для каждой цели + сам `STATUS.yaml` + ожидаемые claim-id от владельца (подсказка для сверки, не истина).
 **Жёсткие правила:** сверка идёт с внешним источником истины (реальный вывод `blast_radius.py`), не с тем, что навигатор сам про себя заявил; расхождение навигатора с `blast_radius.py` — fail этого пункта, а не «навигатор был неуверен, но старался»; чтения считаются тем же правилом, что задано навигатору (записи `(grep)`/`(tool)` и стартовые `CLAUDE.md` + rules-файл не в счёт, claim со списком путей = одно чтение), больше трёх засчитанных чтений — fail цели; blast radius сверяется по claim-id, а для multi-path claim'а — объединением выводов `blast_radius.py` по всем путям claim'а, не по одному пути, который назвал навигатор; если на цель претендуют несколько claim'ов с разными статусами (урок 16), принимается тот, чей `id`/`note` отвечает concern'у цели, даже когда ожидание владельца называло соседний, — с объяснением в `evidence`.
 **Выходная схема:** `results: [{target, navigator_verdict: pass|fail, claim_id_correct, path_correct, blast_radius_match, status_correct, reads_within_3, evidence}]`, `pass_count`.
-**Пример:** `{"target": "renewal reminder timing", "navigator_verdict": "pass", "blast_radius_match": true}`.
+**Пример:** `{"target": "invoice reminder timing", "navigator_verdict": "pass", "blast_radius_match": true}`.
 
 ```
 Grade these {{N}} navigator answers. For each target, independently run
@@ -478,7 +478,7 @@ Return JSON: {"results": [{"target","navigator_verdict","claim_id_correct",
 **Вход:** `git diff` с начала сессии (или с последнего sync), текущий `STATUS.yaml`.
 **Жёсткие правила:** дельта минимальна — только claim'ы, чьи `path` реально задет диффом, либо новый код без покрытия; не уверен → `ESCALATE:` вместо угадывания; никогда не понижает и не повышает статус без прямой опоры на diff-строки. **R2 session guard (D53, D67):** каждый `op: add` со статусом `implemented`/`partial` и каждое повышение статуса несут `mutation: {file, find, replace}` — `find` дословно встречается в `file`, замена валит хотя бы один nodeid из `check`, доказано фактическим прогоном (red → restore → green), иначе Stop-хук в blocking-режиме отказывает (`gt_session_guard.py --mode hook`, урок прогона на `service-a`: три claim без `mutation:` = `stop_red`).
 **Выходная схема:** `{delta: [{op: add|update, claim_id, fields: {...}}], escalate: bool, escalate_reason}`.
-**Пример:** `{"delta": [{"op": "update", "claim_id": "renewal_reminder_sends_before_expiry", "fields": {"note": "..."}}], "escalate": false}`.
+**Пример:** `{"delta": [{"op": "update", "claim_id": "invoice_reminder_sends_before_due", "fields": {"note": "..."}}], "escalate": false}`.
 
 ```
 Given this diff ({{GIT_DIFF}}) and the current STATUS.yaml, propose the

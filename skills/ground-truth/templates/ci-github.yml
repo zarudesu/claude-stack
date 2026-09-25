@@ -31,7 +31,7 @@ jobs:
         env:
           # Example only: pass the same env the project's test job passes.
           # The unit suite the probe re-runs needs it to import cleanly.
-          # BOT_TOKEN: "..."
+          # API_TOKEN: "..."
           # DEBUG: "true"
           GT_BASE_REF: "${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}"
         run: |

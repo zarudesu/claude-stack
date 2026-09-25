@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Probe: the cross-repo edge this file's STATUS.yaml declares (the one
-pointing at billing-service:reach_matrix, or whatever the edge.to target
+pointing at billing-service:health_matrix, or whatever the edge.to target
 of your own edge actually is) still holds.
 
 This is a stub that always passes. Replace the body with a real check

@@ -54,7 +54,7 @@
 | **FAIL — идентичность** | `\bClaude\b`, `\bAnthropic\b`, `\bChatGPT\b`, `\bGPT-?\d`, `\bCopilot\b`, `\bLLM\b`, `Co-Authored-By`, `\bAI\b`, `"AI-assisted"`, `"AI-generated"`, `"coding agent"`, `"language model"` | fail | **регистрозависимо** (`\bAI\b` не матчит «Ai» или «ai» внутри обычного слова) |
 | **WARN — бузворды** | delve, leverage, comprehensive, robust, seamless, streamline, consolidate, modernize, enhanced, utilize, facilitate | warn | регистронезависимо |
 
-**Почему по намерению, а не по голому слову (D16).** Плоский `\b(agent|model)\b`-класс regex валит собственный легитимный технический контент — claim `node_agent_health_prober_stub`, `component: "node-agent-health Prober"` из прототипного репозитория содержат банящуюся подстроку, будучи нормальными техническими именами. Гейт, который красит уже закоммиченный легитимный код, учит следующие сессии его обходить или отключать — тот же класс поражения, что decider-gate, только с другой стороны (ложное срабатывание вместо пропуска, spec §2.6). Поэтому:
+**Почему по намерению, а не по голому слову (D16).** Плоский `\b(agent|model)\b`-класс regex валит собственный легитимный технический контент — claim `sync_agent_retry_stub`, `component: "sync-agent Retrier"` из прототипного репозитория содержат банящуюся подстроку, будучи нормальными техническими именами. Гейт, который красит уже закоммиченный легитимный код, учит следующие сессии его обходить или отключать — тот же класс поражения, что decider-gate, только с другой стороны (ложное срабатывание вместо пропуска, spec §2.6). Поэтому:
 
 - голые `\bagent\b`/`\bmodel\b` **не сканируются вообще** — не входят ни в FAIL, ни в WARN набор (User-Agent, ssh-agent, `models.py` — легитимные, частые);
 - совпадение, целиком укладывающееся в уже объявленное в этом же `STATUS.yaml` значение `id`/`component`/`meta.repo`, пропускается автоматически;
@@ -116,9 +116,9 @@ CLI: `python3 tools/ground_truth/gt_mutation_selfcheck.py [--root DIR] [--id CLA
 
 Canary нужен в каждом coverage root с implemented/partial (§19). У каждого нового/повышенного implemented/partial также нужна mutation; canary — выбранное подмножество для периодической приёмки.
 
-**Протухший байткод — источник ложного FAIL (D37).** pytest переписывает тестовые модули под assert-rewrite и кэширует результат в `__pycache__`, а валидность кэша определяет по mtime исходника — с точностью до секунды. Мутация, прогон и откат укладываются в ту же секунду, поэтому следующий запуск подхватывает `.pyc`, собранный по уже не существующему на диске тексту, и печатает провал теста, которого нет: на прогоне так «упал» `test_dead_code_removal`, зелёный при ручном запуске. Отсюда три меры разом — `PYTHONDONTWRITEBYTECODE=1` в env каждого дочернего процесса, `-p no:cacheprovider` у pytest, удаление `__pycache__` после отката. То же правило действует для пробы, которая внутри себя гоняет pytest (`templates/probes/example_probe.py`): проба-обёртка обязана ставить те же env и флаг, иначе унаследует ту же ложную красноту.
+**Протухший байткод — источник ложного FAIL (D37).** pytest переписывает тестовые модули под assert-rewrite и кэширует результат в `__pycache__`, а валидность кэша определяет по mtime исходника — с точностью до секунды. Мутация, прогон и откат укладываются в ту же секунду, поэтому следующий запуск подхватывает `.pyc`, собранный по уже не существующему на диске тексту, и печатает провал теста, которого нет: на прогоне так «упал» `test_removed_helpers`, зелёный при ручном запуске. Отсюда три меры разом — `PYTHONDONTWRITEBYTECODE=1` в env каждого дочернего процесса, `-p no:cacheprovider` у pytest, удаление `__pycache__` после отката. То же правило действует для пробы, которая внутри себя гоняет pytest (`templates/probes/example_probe.py`): проба-обёртка обязана ставить те же env и флаг, иначе унаследует ту же ложную красноту.
 
-**Порядок в I.10: selfcheck ДО fleet-probe, не параллельно (урок прогона).** Selfcheck на секунды меняет содержимое исходников — ровно тех, которые в это же время читают навигаторы fleet-probe. Запущенные параллельно, навигаторы видят мутированное значение (на прогоне — `REWARD_DAYS = 7` у цели 1) и отвечают неверно: провал приёмки, вызванный измерительным инструментом, а не репозиторием. Фазы выстраиваются последовательно — mutation selfcheck отработал, `git status --porcelain` пуст, только после этого стартуют навигаторы.
+**Порядок в I.10: selfcheck ДО fleet-probe, не параллельно (урок прогона).** Selfcheck на секунды меняет содержимое исходников — ровно тех, которые в это же время читают навигаторы fleet-probe. Запущенные параллельно, навигаторы видят мутированное значение (на прогоне — `RETRY_DAYS = 7` у цели 1) и отвечают неверно: провал приёмки, вызванный измерительным инструментом, а не репозиторием. Фазы выстраиваются последовательно — mutation selfcheck отработал, `git status --porcelain` пуст, только после этого стартуют навигаторы.
 
 ## 8. Как pytest/Go/TS/Java-мосты вызывают верификатор
 
@@ -264,7 +264,7 @@ SC-b без изменений: authoring-time доказательство «ch
 **Пример 1 — фантомный check (ловит `check_collectible`):**
 ```
 $ python3 tools/ground_truth/verify.py --mode=sync
-[FAIL] renewal_reminder_sends_before_expiry: check not collectible: test_sends_three_days_before_expiry not found in tests/test_renewal_reminder_service.py
+[FAIL] invoice_reminder_sends_before_due: check not collectible: test_sends_three_days_before_due not found in tests/test_invoice_reminder.py
 ```
 Тест переименовали, `check:` в `STATUS.yaml` не обновили. Чинится правкой `check:` на актуальный node id (контракт разошёлся, не код).
 
@@ -276,7 +276,7 @@ $ python3 tools/ground_truth/verify.py --mode=sync
 
 **Пример 3 — debt против правила resolved-while-stub (ловит `check_links`):**
 ```
-[FAIL] homenet_health_needs_implementation: debt marked resolved but claim homenet_health_probe_wiring is still 'stub'
+[FAIL] report_worker_health_needs_implementation: debt marked resolved but claim report_worker_health_wiring is still 'stub'
 ```
 Кто-то пометил `debt.state: resolved`, не тронув `claims[...].status`. Чинится либо откатом `state` на `open`/`accepted`, либо реальным доведением claim'а до `implemented`/`design-only` — но не одной правкой `debt.state` без второй.
 

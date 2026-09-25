@@ -4,7 +4,7 @@
     "app/export.py": { "status": "partial", "or_split": ["implemented", "stub"] },
     "app/notify.py": { "status": "stub" },
     "app/scheduler.py": { "status": "absent", "or_id_contains": "scheduler" },
-    "svc/quorum.go": { "status": "implemented", "check_kind": "go_test" },
+    "svc/majority.go": { "status": "implemented", "check_kind": "go_test" },
     "web/state.js": { "status": "implemented", "check_kind": "js_test" }
   },
   "debt_must_exist": [

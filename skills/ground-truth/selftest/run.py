@@ -194,33 +194,33 @@ SOURCES: dict[str, str] = {
         '    assert main_module.main() == "ok"\n'
     ),
     "go.mod": "module gtselftest\n\ngo 1.22\n",
-    "svc/quorum.go": (
+    "svc/majority.go": (
         "// Package svc decides a majority verdict.\n"
         "package svc\n"
         "\n"
         "// Verdict reports which side has more votes.\n"
-        "func Verdict(fit, unfit int) string {\n"
-        "\tif fit > unfit {\n"
-        '\t\treturn "fit"\n'
+        "func Verdict(yes, no int) string {\n"
+        "\tif yes > no {\n"
+        '\t\treturn "yes"\n'
         "\t}\n"
-        '\treturn "unfit"\n'
+        '\treturn "no"\n'
         "}\n"
     ),
-    "svc/quorum_test.go": (
+    "svc/majority_test.go": (
         "package svc\n"
         "\n"
         'import "testing"\n'
         "\n"
-        "func TestVerdictFit(t *testing.T) {\n"
-        '\tif got := Verdict(3, 1); got != "fit" {\n'
-        '\t\tt.Fatalf("expected fit, got %s", got)\n'
+        "func TestVerdictYes(t *testing.T) {\n"
+        '\tif got := Verdict(3, 1); got != "yes" {\n'
+        '\t\tt.Fatalf("expected yes, got %s", got)\n'
         "\t}\n"
         "}\n"
     ),
     "web/state.js": (
         "// Maps a logical state to a display colour.\n"
         "function colorFor(state) {\n"
-        '  if (state === "fit") return "green";\n'
+        '  if (state === "yes") return "green";\n'
         '  return "gray";\n'
         "}\n"
         "\n"
@@ -231,8 +231,8 @@ SOURCES: dict[str, str] = {
         'const assert = require("node:assert");\n'
         'const { colorFor } = require("./state.js");\n'
         "\n"
-        'test("fit is green", () => {\n'
-        '  assert.strictEqual(colorFor("fit"), "green");\n'
+        'test("yes is green", () => {\n'
+        '  assert.strictEqual(colorFor("yes"), "green");\n'
         "});\n"
     ),
     "docs/_human/notes.md": "# Human notes\n\nArchive only, agents do not read this.\n",
@@ -304,28 +304,28 @@ claims:
       find: 'return "ok"'
       replace: 'return "nope"'
 
-  - id: svc_quorum
-    component: "quorum service"
+  - id: svc_majority
+    component: "majority service"
     kind: status
     status: implemented
     check_kind: go_test
-    check: "svc::TestVerdictFit"
+    check: "svc::TestVerdictYes"
     path: "svc"
     note: "Verdict() picks the side with more votes; the canary flips the branch it returns."
     canary: true
     mutation:
-      file: "svc/quorum.go"
-      find: 'return "fit"'
-      replace: 'return "unfit"'
+      file: "svc/majority.go"
+      find: 'return "yes"'
+      replace: 'return "no"'
 
   - id: web_state_color
     component: "web state colours"
     kind: status
     status: implemented
     check_kind: js_test
-    check: "web/test_state.js::fit is green"
+    check: "web/test_state.js::yes is green"
     path: "web/state.js"
-    note: "colorFor() maps the fit state to green."
+    note: "colorFor() maps the yes state to green."
 
   - id: main_script
     component: "entry script"
@@ -937,7 +937,7 @@ def fault_scenarios() -> bool:
     finally:
         shutil.rmtree(fake_git_dir, ignore_errors=True)
 
-    with patched(status_path, "    to: handlers_http\n", '    to: "billing-service:reach_matrix"\n'):
+    with patched(status_path, "    to: handlers_http\n", '    to: "billing-service:health_matrix"\n'):
         cp = verify("sync")
         ok &= record(
             "18: edge.to accepts any '<name>:<text>' external shape, not just 'external-repo:'",
@@ -1371,7 +1371,7 @@ def step4_scenarios() -> bool:
     ok = True
     status_path = FIXTURE / "STATUS.yaml"
     worker_path = FIXTURE / "services" / "beta" / "worker.py"
-    quorum_path = FIXTURE / "svc" / "quorum.go"
+    majority_path = FIXTURE / "svc" / "majority.go"
     state_path = FIXTURE / "web" / "state.js"
     original_status = status_path.read_text()
     original_worker = worker_path.read_text()
@@ -1557,11 +1557,11 @@ def step4_scenarios() -> bool:
     if shutil.which("go") is None:
         ok &= record("49: go check scenarios skipped (no go toolchain here)", True)
     else:
-        with patched(quorum_path, 'return "fit"', 'return "unfit"'):
+        with patched(majority_path, 'return "yes"', 'return "no"'):
             cp = verify("full")
             ok &= record(
                 "49: go_test claim whose test is red -> exit 1 in full",
-                cp.returncode == 1 and "svc_quorum" in out(cp) and "check is red" in out(cp),
+                cp.returncode == 1 and "svc_majority" in out(cp) and "check is red" in out(cp),
                 out(cp),
             )
 
@@ -1587,7 +1587,7 @@ def step4_scenarios() -> bool:
             out(cp),
         )
 
-    cp = mutation_selfcheck("svc_quorum")
+    cp = mutation_selfcheck("svc_majority")
     ok &= record(
         "52: mutation selfcheck drives a go canary",
         cp.returncode == 0 and ("went red" in out(cp) or "[SKIP]" in out(cp)),
@@ -1595,7 +1595,7 @@ def step4_scenarios() -> bool:
     )
 
     if shutil.which("go") is not None:
-        args = ["tools/ground_truth/gt_mutation_selfcheck.py", "--id", "svc_quorum"]
+        args = ["tools/ground_truth/gt_mutation_selfcheck.py", "--id", "svc_majority"]
         cp_skip = run(args, FIXTURE, env=stripped)
         cp_strict = run([*args, "--strict"], FIXTURE, env=stripped)
         ok &= record(
@@ -1628,9 +1628,9 @@ def step4_scenarios() -> bool:
     else:
         js_test_path = FIXTURE / "web" / "test_state.js"
         with (
-            patched(js_test_path, '"fit is green"', '"colorFor(fit) is green"'),
-            patched(status_path, "web/test_state.js::fit is green",
-                    "web/test_state.js::colorFor(fit) is green"),
+            patched(js_test_path, '"yes is green"', '"colorFor(yes) is green"'),
+            patched(status_path, "web/test_state.js::yes is green",
+                    "web/test_state.js::colorFor(yes) is green"),
             patched(state_path, 'return "green"', 'return "blue"'),
         ):
             cp = verify("full")
@@ -1827,14 +1827,14 @@ JUNIT_CLAIM = (
     "    kind: status\n"
     "    status: implemented\n"
     "    check_kind: junit\n"
-    '    check: "fx.LedgerTest::balanceIsFit"\n'
+    '    check: "fx.LedgerTest::balanceIsYes"\n'
     '    path: "jvm/src/main/java/fx/Ledger.java"\n'
-    '    note: "Ledger.balance() reports fit; the canary flips the returned string."\n'
+    '    note: "Ledger.balance() reports yes; the canary flips the returned string."\n'
     "    canary: true\n"
     "    mutation:\n"
     '      file: "jvm/src/main/java/fx/Ledger.java"\n'
-    "      find: 'return \"fit\"'\n"
-    "      replace: 'return \"fat\"'\n"
+    "      find: 'return \"yes\"'\n"
+    "      replace: 'return \"yas\"'\n"
 )
 
 JVM_POM = (
@@ -1852,7 +1852,7 @@ JVM_LEDGER = (
     "// Ledger reports whether the books balance.\n"
     "public class Ledger {\n"
     "    public static String balance() {\n"
-    '        return "fit";\n'
+    '        return "yes";\n'
     "    }\n"
     "}\n"
 )
@@ -1863,11 +1863,11 @@ JVM_LEDGER_TEST = (
     "import org.junit.jupiter.api.Test;\n"
     "import static org.junit.jupiter.api.Assertions.assertEquals;\n"
     "\n"
-    '// probe: src/main/java/fx/Ledger.java contains return "fit"\n'
+    '// probe: src/main/java/fx/Ledger.java contains return "yes"\n'
     "public class LedgerTest {\n"
     "    @Test\n"
-    "    void balanceIsFit() {\n"
-    '        assertEquals("fit", Ledger.balance());\n'
+    "    void balanceIsYes() {\n"
+    '        assertEquals("yes", Ledger.balance());\n'
     "    }\n"
     "}\n"
 )
@@ -1904,7 +1904,7 @@ def junit_scenarios() -> bool:
             out(cp),
         )
 
-        with patched(ledger_path, 'return "fit"', 'return "fat"'):
+        with patched(ledger_path, 'return "yes"', 'return "yas"'):
             cp = verify("full", junit_env())
             ok &= record(
                 "70: junit claim whose test is red -> exit 1 in full",
@@ -1912,7 +1912,7 @@ def junit_scenarios() -> bool:
                 out(cp),
             )
 
-        with patched(status_path, 'check: "fx.LedgerTest::balanceIsFit"', 'check: "fx.LedgerTest::nope"'):
+        with patched(status_path, 'check: "fx.LedgerTest::balanceIsYes"', 'check: "fx.LedgerTest::nope"'):
             cp = verify("sync", toolchain_free_env())
             ok &= record(
                 "71: static phantom method -> sync catches it without mvn",
@@ -1945,7 +1945,7 @@ def junit_scenarios() -> bool:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(
             '<testsuite name="fx.LedgerTest">'
-            '<testcase name="balanceIsFit" classname="fx.LedgerTest"/></testsuite>'
+            '<testcase name="balanceIsYes" classname="fx.LedgerTest"/></testsuite>'
         )
         try:
             cp = verify("full", junit_env(noreport=True))
@@ -2010,17 +2010,17 @@ def surefire_parser_scenario() -> bool:
         return path
 
     cases = [
-        ("failure message", f'<testcase classname="{fqn}" name="balanceIsFit"><failure message="expected fit">trace</failure></testcase>', (False, "expected fit")),
-        ("error message", f'<testcase classname="{fqn}" name="balanceIsFit"><error message="boom"/></testcase>', (False, "boom")),
-        ("skipped", f'<testcase classname="{fqn}" name="balanceIsFit"><skipped/></testcase>', (False, "test skipped")),
-        ("parameterized [1]", f'<testcase classname="{fqn}" name="balanceIsFit[1]"/>', (True, "")),
-        ("parameterized (String)", f'<testcase classname="{fqn}" name="balanceIsFit(String)"/>', (True, "")),
-        ("other class only", '<testcase classname="fx.OtherTest" name="balanceIsFit"/>', (False, "testcase balanceIsFit not in surefire report: test did not run")),
+        ("failure message", f'<testcase classname="{fqn}" name="balanceIsYes"><failure message="expected yes">trace</failure></testcase>', (False, "expected yes")),
+        ("error message", f'<testcase classname="{fqn}" name="balanceIsYes"><error message="boom"/></testcase>', (False, "boom")),
+        ("skipped", f'<testcase classname="{fqn}" name="balanceIsYes"><skipped/></testcase>', (False, "test skipped")),
+        ("parameterized [1]", f'<testcase classname="{fqn}" name="balanceIsYes[1]"/>', (True, "")),
+        ("parameterized (String)", f'<testcase classname="{fqn}" name="balanceIsYes(String)"/>', (True, "")),
+        ("other class only", '<testcase classname="fx.OtherTest" name="balanceIsYes"/>', (False, "testcase balanceIsYes not in surefire report: test did not run")),
     ]
     bad = []
     for label, body, want in cases:
         path = report(body)
-        got = contract_lib._surefire_outcome(path, fqn, "balanceIsFit")
+        got = contract_lib._surefire_outcome(path, fqn, "balanceIsYes")
         shutil.rmtree(path.parent, ignore_errors=True)
         if got != want:
             bad.append(f"{label}: got {got!r}, want {want!r}")

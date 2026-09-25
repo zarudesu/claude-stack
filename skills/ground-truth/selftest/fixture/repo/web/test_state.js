@@ -18,8 +18,8 @@ function assertEqual(actual, expected) {
   }
 }
 
-check("fit is green", () => assertEqual(colorFor("fit"), "green"));
-check("unfit is red", () => assertEqual(colorFor("unfit"), "red"));
+check("yes is green", () => assertEqual(colorFor("yes"), "green"));
+check("no is red", () => assertEqual(colorFor("no"), "red"));
 check("unknown is gray", () => assertEqual(colorFor("unknown"), "gray"));
 
 if (failed > 0) {

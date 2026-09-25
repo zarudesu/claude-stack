@@ -152,22 +152,8 @@ Payload keys per workflow (unchanged from the source scripts):
 
 ### 1.6 Scratch one-offs explicitly not ported
 
-Repo-specific generators and hand edits, replaced by agents with schemas or by generic stages:
-`mkclaims.py`, `mk.py`, `build_map.py`, `hand_renumber.py`, `post_remap_status_edits.py`,
-`manual_edits_r13.py`, `apply_probefix_proposals.py`, `add_debt.py`, `apply_readme_edits.py`,
-`check_texts.py`, `gt-prior-i2-i35.v1.js`.
-Exploration and probe scratch: `ast_scan.py`, `undef.py`, `dsdump.py`, `harness.py`, `mut*.py`,
-`probe*.py`, `c2.py`, `cfg_probe.py`, `reg_probe.py`, `wal_probe.py`, `t_apply.py`,
-`test_apply_probe.py`, `head_*.py`, `main.orig.py`.
-Other runs sharing the scratchpad: `apply_judge_edits.py`, `chk.py`, `links*`, `merge*`,
-`mk_json.py`, `mkjson.py`, `patch*`, `proto*`, `q.py`, `summary*`, `write_doc*`,
-`check_refs.py`, `probe_rev.py`, `test_probe_gamification.py`, `verify_boot_wiring*`,
-`t.stripped.js`.
-Folded into generic stages instead of ported as files: `prose_remap.py` (into
-`templates/remap_line_refs.py`), `recon_batches.py` (into `i5_recon_build`),
-`build_recon2.py` (same stage with `--pass 2`), `expand_basenames.py` /
-`expand_basenames2.py` / `expand2a.py` / `expand2b.py` (into `i5_recon_apply`'s
-basename-expansion step).
+One-off scratch scripts from earlier runs (repo-specific generators, hand edits, exploration
+probes) are not ported; the reusable parts were folded into the generic stages listed above.
 
 ---
 

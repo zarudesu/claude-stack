@@ -12,7 +12,7 @@ from pathlib import Path
 @functools.lru_cache(maxsize=None)
 def _is_testcase(node: ast.ClassDef) -> bool:
     """pytest collects unittest.TestCase subclasses whatever their name
-    (``RenderMetricsTests``), not only ``Test*`` classes."""
+    (``ParserTests``), not only ``Test*`` classes."""
     for base in node.bases:
         name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
         if name.endswith("TestCase"):
