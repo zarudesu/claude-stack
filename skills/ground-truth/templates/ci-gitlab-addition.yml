@@ -22,8 +22,8 @@ status-contract:
   # the same commands those tests run and fail the same way without it.
   script:
     - export GT_BASE_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
-    # git and ripgrep: the verifier shells out to both (ls-files, base-ref diff, banned-word scan); slim/alpine python images ship neither.
-    - (command -v apt-get >/dev/null && apt-get update -qq && apt-get install -y -qq git ripgrep) || (command -v apk >/dev/null && apk add --no-cache git ripgrep)
+    # git: the verifier shells out to it (ls-files, base-ref diff); slim/alpine python images ship without it.
+    - (command -v apt-get >/dev/null && apt-get update -qq && apt-get install -y -qq git) || (command -v apk >/dev/null && apk add --no-cache git)
     # Example only: install the same dependencies as the project's test
     # job (plus pyyaml and pytest, which the verifier itself needs) --
     # copy that job's install line rather than retyping it. Also export

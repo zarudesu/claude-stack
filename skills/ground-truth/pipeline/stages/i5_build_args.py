@@ -82,7 +82,7 @@ def main(argv: list[str]) -> int:
 
     status_path = Path(args.status) if args.status else run.repo / "STATUS.yaml"
     if not status_path.is_file():
-        print(f"error: STATUS.yaml not found at {status_path}", file=sys.stderr)
+        print(f"error: STATUS.yaml not found at {status_path}; run ground-truth init first", file=sys.stderr)
         return 1
 
     models = None

@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     import contract_lib  # noqa: E402
-    from gt_edit_guard import is_test_file  # noqa: E402
+    from gt_edit_guard import claim_ids_for, is_test_file  # noqa: E402
 except Exception as exc:  # a half-installed tools/ground_truth is not a red check
     print(f"WARN guard internal error: {exc}", file=sys.stderr)
     sys.exit(1 if "ci" in sys.argv or "--mode=ci" in sys.argv else 0)
@@ -408,8 +408,17 @@ def _new_definitions(rel: str, lines: list[str]) -> list[str]:
 
 def rule_new_definitions(root, claims, changed, added, roots, excludes) -> list[tuple[str, str, str]]:
     """R3: new top-level code is named by a test somewhere in this change."""
+    # A file a claim names is code under that claim, whatever its name looks
+    # like: the claim lookup runs before the test-name rule, in both places.
+    claim_entries = [
+        [p, str(claim.get("id"))] for claim in claims for p in _claim_paths(claim)
+    ]
+
+    def _is_test(rel: str) -> bool:
+        return not claim_ids_for(rel, claim_entries) and is_test_file(rel)
+
     test_text = "\n".join(
-        "\n".join(lines) for rel, lines in added.items() if is_test_file(rel)
+        "\n".join(lines) for rel, lines in added.items() if _is_test(rel)
     )
     issues = []
     target_cache: dict[str, str] = {}
@@ -418,7 +427,7 @@ def rule_new_definitions(root, claims, changed, added, roots, excludes) -> list[
             continue
         if rel == "STATUS.yaml" or rel.startswith("tools/ground_truth/"):
             continue
-        if is_test_file(rel) or not contract_lib._under_coverage_roots(rel, roots, excludes):
+        if _is_test(rel) or not contract_lib._under_coverage_roots(rel, roots, excludes):
             continue
         names = _new_definitions(rel, added[rel])
         if not names:

@@ -8,8 +8,8 @@ run.research/i6/sample.json for auditor A's fixed sample. Also writes
 run.scratch/i6/i6-args.json, the {repo, python, sample_path, out_dir,
 docs, models?} object the ground-truth-i6 workflow expects as `args`.
 
-Doc list defaults to every tracked *.md file except docs/_human/**, the
-same convention used for the I.5 doc-fix stage. Sampling is a plain
+Doc list defaults to every tracked *.md, *.mdx, *.rst and *.adoc file
+except docs/_human/**, the same convention used for the I.5 doc-fix stage. Sampling is a plain
 paragraph/bullet heuristic (see _paragraphs/_is_candidate below), not a
 model call -- it only needs to produce a plausible, reproducible sample
 for auditor A to check; auditor B independently self-samples the same
@@ -29,14 +29,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gt_lib.git import ls_files, show  # noqa: E402
 from gt_lib.paths import args_path, load_run  # noqa: E402
 
+_DOC_GLOBS = ("*.md", "*.mdx", "*.rst", "*.adoc")
 _EXCLUDE_GLOBS = ("docs/_human/**",)
 _LIST_MARK_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _MIN_LEN, _MAX_LEN = 30, 600
 
 
 def default_docs(run) -> list[str]:
-    """Every tracked *.md file, minus docs/_human/**."""
-    all_md = ls_files(run.repo, "*.md")
+    """Every tracked doc file (*.md, *.mdx, *.rst, *.adoc), minus docs/_human/**."""
+    all_md = ls_files(run.repo, *_DOC_GLOBS)
     return [p for p in all_md if not any(fnmatch.fnmatch(p, g) for g in _EXCLUDE_GLOBS)]
 
 
@@ -137,7 +138,7 @@ def main(argv: list[str]) -> int:
     run = load_run(args.run)
     docs = default_docs(run)
     if not docs:
-        print("no tracked *.md docs found (outside docs/_human/**)", file=sys.stderr)
+        print("no tracked *.md/*.mdx/*.rst/*.adoc docs found (outside docs/_human/**)", file=sys.stderr)
         return 1
 
     sample, n_candidates = build_sample(run, docs, args.n, args.seed)

@@ -18,8 +18,6 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ripgrep
           # Example only: install the same dependencies as the project's
           # test job (plus pyyaml and pytest, which the verifier itself
           # needs) -- copy that job's install line rather than retyping it.

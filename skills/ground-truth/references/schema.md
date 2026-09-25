@@ -33,9 +33,10 @@
 | `meta.stale_after_days` | нет | int | окно для WARN по `live_state` (D27). По умолчанию `30`. |
 | `meta.coverage.roots` | да | list[str] | директории — область действия coverage two-way (§4). |
 | `meta.coverage.exclude` | нет | list[str] | fnmatch-глобы (posix-путь относительно корня репо), исключённые из coverage. Каждое исключение — с однострочной причиной рядом в комментарии/PR, не в самой схеме. |
-| `meta.coverage.extensions` | нет | list[str] | какие суффиксы файлов считаются «исходным юнитом». По умолчанию `[".py", ".go", ".ts", ".tsx", ".js", ".sh", ".kt", ".java"]`. |
+| `meta.coverage.extensions` | нет | list[str] | какие суффиксы файлов считаются «исходным юнитом». По умолчанию `[".py", ".go", ".ts", ".tsx", ".js", ".sh", ".kt", ".java"]`. Файлы под roots с другими суффиксами не проверяются; их число один раз выводится WARN `N files under roots have extensions outside meta.coverage.extensions (top: .html×8, .vue×2)` (топ-5, никогда не FAIL); документация, картинки, шрифты, данные и конфиги (`.md .json .yml .png` и т.п., список `_NON_CODE_EXTENSIONS` в `contract_lib.py`) в счёт не идут. |
 | `meta.coverage.runner` | да | `pytest`\|`go_test`\|`js_test`\|`junit`\|`none` | подсказка по умолчанию для новых claim'ов этого репозитория; не меняет резолюцию существующих `check_kind`. |
 | `meta.banned_words` | нет | map | скоуп-исключения для D16-скана запрещённых слов, см. ниже. |
+| `meta.banned_words.enabled` | нет | bool | `false` выключает D16-скан целиком; `verify.py --mode=full` вместо него печатает один WARN `banned-words scan disabled by meta.banned_words.enabled`. Ключа нет — то же, что `true`. Ставить `false`, только если продукт или его доки законно упоминают AI-инструменты; иначе точечный `exclude`. Не-bool значение — `check_shape` FAIL. |
 | `meta.banned_words.exclude` | нет | list[map] | список `{path, why}`: `path` -- fnmatch-глоб (posix-путь относительно корня репо, `*` пересекает `/`, как в `meta.coverage.exclude`); `why` -- обязательная непустая причина. Каждый элемент обязан иметь оба поля -- иначе `check_shape` FAIL. |
 
 `meta.banned_words.exclude` сужает область D16-скана запрещённых слов
@@ -156,11 +157,13 @@
 
 ### 5.1 Что такое «юнит»
 
-Юнит = файл под одним из `meta.coverage.roots`, чей суффикс входит в `meta.coverage.extensions` (по умолчанию `.py .go .ts .tsx .js .sh .kt .java`), **минус**:
+Юнит = файл из `git ls-files --cached --others --exclude-standard` (tracked плюс untracked, не игнорируемые — `node_modules/`, сборка и прочее из `.gitignore` не считаются) под одним из `meta.coverage.roots`, чей суффикс входит в `meta.coverage.extensions` (по умолчанию `.py .go .ts .tsx .js .sh .kt .java`), **минус**:
 
 - совпадение с любым `fnmatch`-паттерном из `meta.coverage.exclude` (fnmatch по **posix-строке** относительного пути, не `Path.match` — `**` не работает в `Path.match` до Python 3.13, окружение это не гарантирует);
-- любой путь, содержащий `__pycache__`;
-- файлы, чей basename начинается с `test_` или заканчивается на `_test.<ext>` (тестовые файлы сами по себе не требуют claim'а — их покрывает `check`, указывающий НА них из claim'а тестируемого кода).
+- любой путь с сегментом `__pycache__` или `.worktrees`, и дерево `tools/ground_truth/`;
+- тестовые файлы (сами по себе не требуют claim'а — их покрывает `check`, указывающий НА них из claim'а тестируемого кода): basename `test_*`, `*_test.<ext>`, `*.test.*`, `*.spec.*` — только если расширение не из `_NON_CODE_EXTENSIONS` (`docker-compose.test.yml`, `test_data.json` тестами не считаются); либо каталог `tests` / `__tests__` в любом месте пути; либо `test` / `spec` первым сегментом пути или сразу после `src` (`spec/…`, `src/test/…`; `src/api/spec/…` — код). Файл, который назван в `path` claim'а, защищён всегда: edit guard и Stop-хук сначала ищут claim и только потом применяют правило теста. То же правило (`contract_lib.is_test_path`, копия в `gt_edit_guard.is_test_file`) применяют edit guard и Stop-хук.
+
+git недоступен или `ls-files` упал — **FAIL** `could not enumerate files, coverage scan did not run`, не молчаливый ноль юнитов.
 
 **Sanity-проверка самих `exclude`-паттернов.** Голый wildcard (паттерн, у которого после `pat.strip("*")` ничего не остаётся — `"**"`, `"*"`) — **FAIL** `meta.coverage.exclude entry is a bare wildcard` сразу, независимо от того, что он реально исключает: это заведомо не «причина рядом с исключением» (§5.4 пример 4), а попытка выключить coverage целиком. Паттерн, который совпадает больше чем с 90% файлов-кандидатов coverage-скана (до исключений), тоже **FAIL** `exclude should not swallow nearly the entire coverage scan` — тот же класс проблемы более узким паттерном.
 

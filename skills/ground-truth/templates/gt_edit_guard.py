@@ -48,14 +48,17 @@ CACHE_NAME = "ground-truth-paths-v2.json"
 PROBES_PREFIX = "tools/ground_truth/probes/"
 PROBE_TIMEOUT = 20
 
-_TEST_SUFFIXES = (
-    "_test.py",
-    "_test.go",
-    ".test.js",
-    ".test.ts",
-    ".spec.js",
-    ".spec.ts",
+# Same rule as contract_lib.is_test_path, restated here so this hook never
+# imports the verifier; the selftest fails when the two copies differ.
+_NON_CODE_EXTENSIONS = frozenset(
+    ".md .mdx .rst .adoc .txt .png .jpg .jpeg .gif .webp .svg .ico .pdf .mp3 .mp4 "
+    ".woff .woff2 .ttf .otf .eot .json .yml .yaml .toml .lock .csv .xml .ini .cfg "
+    ".env .example .gitkeep .map".split()
 )
+_TEST_DIR_NAMES = ("tests", "__tests__")
+_TEST_TOP_DIR_NAMES = ("test", "spec")
+_TEST_NAME_MARKERS = (".test.", ".spec.")
+_TEST_SUFFIX_RE = re.compile(r"_test\.[^./]+$")
 
 
 def is_test_file(rel: str) -> bool:
@@ -67,14 +70,19 @@ def is_test_file(rel: str) -> bool:
     lives here because this file is the latency-sensitive one and must not
     pull in the verifier's yaml stack to answer the question.
     """
-    posix = Path(rel).as_posix()
-    parts = posix.split("/")
-    if "tests" in parts[:-1]:
+    parts = Path(rel).as_posix().split("/")
+    dirs = parts[:-1]
+    if any(p in _TEST_DIR_NAMES for p in dirs):
         return True
+    for i, p in enumerate(dirs):
+        if p in _TEST_TOP_DIR_NAMES and (i == 0 or dirs[i - 1] == "src"):
+            return True
     name = parts[-1]
-    if name.startswith("test_") and name.endswith(".py"):
+    if Path(name).suffix.lower() in _NON_CODE_EXTENSIONS:
+        return False
+    if name.startswith("test_") or _TEST_SUFFIX_RE.search(name):
         return True
-    return name.endswith(_TEST_SUFFIXES)
+    return any(m in name for m in _TEST_NAME_MARKERS)
 
 
 def under_roots(rel: str, roots, excludes) -> bool:
@@ -318,17 +326,17 @@ def _bash_candidate_rels(command: str, cwd: str, root: Path, cfg: dict) -> list[
 
 def _leading_checks(root: Path, git_dir: Path, rel: str, sid: str, via: str) -> int | None:
     """Verdicts that never need the coverage cache. None means "keep going"."""
-    # The contract's own artifacts, human docs and tests are never claim
-    # subjects; a claim about them would have nothing to point at. A probe
-    # is the one exception under tools/ground_truth/: it carries its own
-    # rule below, everything else there stays exempt.
+    # The contract's own artifacts and human docs are never claim subjects;
+    # a claim about them would have nothing to point at. A probe is the one
+    # exception under tools/ground_truth/: it carries its own rule below,
+    # everything else there stays exempt. Tests are exempted later, in
+    # _gate_covered_or_roots, after the claim lookup: a file a claim names
+    # is always gated, whatever its name looks like.
     if rel == "STATUS.yaml" or rel.startswith("docs/"):
         return 0
     if rel.startswith("tools/ground_truth/"):
         if rel.startswith(PROBES_PREFIX) and rel.endswith(".py"):
             return _probe_rule(root, git_dir, rel, sid, via)
-        return 0
-    if is_test_file(rel):
         return 0
     return None
 
@@ -342,6 +350,8 @@ def _gate_covered_or_roots(root: Path, git_dir: Path, rel: str, sid: str, cfg: d
     ids = claim_ids_for(rel, cfg.get("paths"))
     if ids:
         return _blast_gate(git_dir, rel, sid, ids, via)
+    if is_test_file(rel):
+        return 0
     if not under_roots(rel, cfg.get("roots"), cfg.get("exclude")):
         return 0
     # STATUS.yaml already modified this session: the claim is being written

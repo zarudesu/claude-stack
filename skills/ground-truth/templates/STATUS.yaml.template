@@ -20,6 +20,7 @@ meta:
     extensions: [".py"]            # optional; default: .py .go .ts .tsx .js .sh .kt
     runner: pytest                 # pytest | go_test | js_test | junit | none -- default hint for new claims
   banned_words:                    # optional; scopes the banned-word scan (D16)
+    enabled: true                  # set false if the product or its docs legitimately name AI tools
     exclude:
       - path: "services/tax_rates.py"          # fnmatch glob; "*" crosses "/"
         why: "product data: VAT rates keyed by ISO 3166 country code; Anguilla's code matches the banned-word pattern"

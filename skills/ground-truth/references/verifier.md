@@ -34,7 +34,7 @@
 | `check_canary_roots(root, data, mode)` | coverage-root, где есть `implemented`/`partial`-claim'ы, но ни на одном нет `canary: true` — WARN в `sync`, FAIL в `full` — §19 | да (WARN) | да (FAIL) |
 | `check_audit_due(root, data, mode)` | Возраст аудита / объём изменений — повод для ревью, не доказательство дефекта | WARN | WARN |
 | `check_status_raise(root, data, mode)` | сравнивает статусы claim'ов с базовой версией `STATUS.yaml` (`sync` → `HEAD`, `full` → `GT_BASE_REF`/`HEAD~1`): повышение ранга при неизменённом `check` и нетронутых файлах check'а → FAIL — §14 ниже | да | да |
-| `check_no_banned_words(root, data)` | сканирует `git ls-files --cached --others --exclude-standard` (tracked + untracked, не игнорируемые; только этот git-репозиторий) на идентити-токены и бузворды — §3 ниже (D36) | нет | да |
+| `check_no_banned_words(root, data)` | сканирует `git ls-files --cached --others --exclude-standard` (tracked + untracked, не игнорируемые; только этот git-репозиторий) на идентити-токены и бузворды — §3 ниже (D36); `meta.banned_words.enabled: false` выключает скан, взамен один WARN | нет | да |
 | `check_stale_live_state(root, data)` | `git log -1 -L <start>,<end>:STATUS.yaml` по каждому `live_state`-claim'у — §4 ниже | нет | да |
 
 `check_assertion_density` — в `sync` тоже (дешёвая, чисто AST, без субпроцессов) — постоянно включённая структурная линза на класс «check без зубов», не только на разовом мутационном упражнении (spec §2.6).
@@ -95,6 +95,8 @@
 Дешёвая, всегда включённая (`sync` + `full`) структурная проверка class'а «check без зубов»: AST-обход каждого уникального файла, на который указывает хотя бы один `check_kind: pytest`-claim, поиск `FunctionDef`/`AsyncFunctionDef` с именем `test_*`, подсчёт узлов `ast.Assert`, вызовов вида `self.assert*(...)` и, отдельно, `with pytest.raises(...)`/`with pytest.warns(...)`/`self.assertRaises(...)`/`self.assertWarns(...)` внутри тела функции — тест, характеризующий `stub`-claim через ожидаемое исключение (см. `beta_worker_stub` в `selftest/run.py`), реально доказывает поведение и не должен считаться «без зубов» только потому что в нём нет буквального `assert`. Ноль — **WARN** `<check node id>: test has no assertions`; для claim'а, которого нет в базовой версии, — FAIL (новый claim обязан прийти с check'ом, способным упасть).
 
 **Новый claim — FAIL, а не WARN.** Severity зависит от того, был ли claim в базовой версии `STATUS.yaml` (та же база, что у status-raise guard'а, §14 — обе проверки берут её через один общий помощник, чтобы не разойтись в том, что значит «до этого изменения»). Claim, появившийся в этом изменении и сразу указывающий на тест с нулём ассертов, — FAIL `<check>: test has no assertions -- a new claim must ship a check that can fail`: контракт пишется здесь и сейчас, и требовать от него зубов дешевле всего именно сейчас. Тот же тест под claim'ом, который уже лежит в базе, остаётся WARN — иначе включение проверки покрасило бы весь накопленный долг разом. База не читается (нет `GT_BASE_REF`, первый коммит, git недоступен) → WARN для всех, не FAIL: неизвестно, какие claim'ы новые.
+
+Claim'ы с другим `check_kind` (`go_test`, `js_test`, `junit`, `probe`) линза не читает; вместо молчания прогон печатает один сводный WARN `assertion density checked only for pytest claims; N claims skipped (kinds: go_test, probe)`, не по одному на claim.
 
 Это структурная линза, не замена мутационному самопроверу (§7): assertion-density лечит «теста нет вообще», mutation selfcheck — «assert есть, но проверяет не тот инвариант».
 

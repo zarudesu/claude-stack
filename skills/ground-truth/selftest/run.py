@@ -1961,6 +1961,7 @@ def junit_scenarios() -> bool:
     ok &= i9_junit_scenario()
     ok &= i9_ci_cache_scenario()
     ok &= i9_nested_python_scenario()
+    ok &= i9_portability_scenarios()
     return ok
 
 
@@ -2251,6 +2252,396 @@ def i9_nested_python_scenario() -> bool:
     )
 
 
+def portability_scenarios() -> bool:
+    """Coverage and scan rules that decide whether the verifier works on a
+    repo laid out unlike the fixture: git's view of the tree instead of a
+    directory walk, one test-file rule shared by the verifier and the edit
+    hook, an opt-out for the banned-word scan, and the WARNs that say what
+    was not checked."""
+    ok = True
+    status_path = FIXTURE / "STATUS.yaml"
+    readme_path = FIXTURE / "README.md"
+    gitignore_path = FIXTURE / ".gitignore"
+
+    ignored = FIXTURE / "services" / "generated" / "gen.py"
+    untracked = FIXTURE / "services" / "fresh_mod.py"
+    leaked = FIXTURE / "services" / ".worktrees" / "x" / "leak.py"
+    for path in (ignored, leaked):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with appended(gitignore_path, "services/generated/\n"), added_file(ignored, "X = 1\n"), added_file(
+            untracked, "Y = 2\n"
+        ), added_file(leaked, "Z = 3\n"):
+            cp = verify("full")
+            ok &= record(
+                "79: coverage reads git ls-files: an untracked file under roots is uncovered, "
+                "a gitignored one and one under .worktrees/ are not",
+                cp.returncode == 1
+                and "services/fresh_mod.py is not covered by any claim" in out(cp)
+                and "gen.py" not in out(cp)
+                and "leak.py" not in out(cp),
+                out(cp),
+            )
+    finally:
+        shutil.rmtree(FIXTURE / "services" / "generated", ignore_errors=True)
+        shutil.rmtree(FIXTURE / "services" / ".worktrees", ignore_errors=True)
+
+    jest_test = FIXTURE / "services" / "__tests__" / "x.test.ts"
+    e2e_spec = FIXTURE / "services" / "e2e" / "tests" / "a.spec.ts"
+    plain_ts = FIXTURE / "services" / "widget.ts"
+    for path in (jest_test, e2e_spec):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with patched(status_path, "      - .py\n", "      - .py\n      - .ts\n"), added_file(
+            jest_test, "test('x', () => {});\n"
+        ), added_file(e2e_spec, "test('a', () => {});\n"), added_file(plain_ts, "export const w = 1;\n"):
+            cp = verify("full")
+            ok &= record(
+                "80: __tests__/x.test.ts and e2e/tests/a.spec.ts need no claim, a plain .ts file does",
+                "services/widget.ts is not covered by any claim" in out(cp)
+                and "x.test.ts" not in out(cp)
+                and "a.spec.ts" not in out(cp),
+                out(cp),
+            )
+    finally:
+        shutil.rmtree(FIXTURE / "services" / "__tests__", ignore_errors=True)
+        shutil.rmtree(FIXTURE / "services" / "e2e", ignore_errors=True)
+
+    sys.path.insert(0, str(TEMPLATES))
+    try:
+        import contract_lib as verifier_lib
+        import gt_edit_guard as edit_guard
+        import gt_session_guard as session_guard
+    finally:
+        sys.path.remove(str(TEMPLATES))
+    samples = [
+        "__tests__/x.test.ts", "e2e/tests/a.spec.ts", "pkg/foo_test.go", "tests/test_a.py",
+        "spec/models/user_spec.rb", "web/test_state.js", "src/app.ts", "src/latest.ts",
+        "contest.py", "src/testing/util.py", "a.spec", "docs/test.md",
+    ]
+    mismatched = [p for p in samples if verifier_lib.is_test_path(p) != edit_guard.is_test_file(p)]
+    same_constants = (
+        verifier_lib._TEST_DIR_NAMES == edit_guard._TEST_DIR_NAMES
+        and verifier_lib._TEST_TOP_DIR_NAMES == edit_guard._TEST_TOP_DIR_NAMES
+        and verifier_lib._TEST_NAME_MARKERS == edit_guard._TEST_NAME_MARKERS
+        and verifier_lib._TEST_SUFFIX_RE.pattern == edit_guard._TEST_SUFFIX_RE.pattern
+        and verifier_lib._NON_CODE_EXTENSIONS == edit_guard._NON_CODE_EXTENSIONS
+    )
+    expected = {
+        "contest.py": False,
+        "docker-compose.test.yml": False,
+        "test_data.json": False,
+        "src/api/spec/openapi_gen.py": False,
+        "spec/models/user_spec.rb": True,
+        "src/test/java/FooTest.java": True,
+        "__tests__/x.test.ts": True,
+        "e2e/tests/a.spec.ts": True,
+        "test_x.py": True,
+        "pkg/handler_test.go": True,
+        "app/widget.spec.ts": True,
+        "app/widget.ts": False,
+    }
+    wrong = [
+        (p, fn.__module__)
+        for p, want in expected.items()
+        for fn in (verifier_lib.is_test_path, edit_guard.is_test_file)
+        if fn(p) != want
+    ]
+    ok &= record(
+        "81: gt_edit_guard restates contract_lib's test-file rule exactly (constants and results), "
+        "and both give the expected answer for config files, src/api/spec/ and real tests",
+        same_constants and not mismatched and not wrong,
+        f"same_constants={same_constants} mismatched={mismatched} wrong={wrong}",
+    )
+
+    # A claimed file is gated even when its name reads as a test: the claim
+    # lookup runs before the test-name exemption.
+    gate_cfg = {
+        "paths": [["docker-compose.test.yml", "compose_test"], ["app/widget.spec.ts", "widget_spec"]],
+        "roots": ["app/"],
+        "exclude": [],
+        "enforcement": "blocking",
+    }
+    gate_calls: list[tuple[str, list[str]]] = []
+    real_blast_gate = edit_guard._blast_gate
+
+    def fake_blast_gate(git_dir, rel, sid, ids, via=""):
+        gate_calls.append((rel, ids))
+        return 2
+
+    edit_guard._blast_gate = fake_blast_gate
+    try:
+        rcs = {
+            rel: edit_guard._check_path(FIXTURE, SCRATCH_BASE, rel, "selftest", gate_cfg)
+            for rel in ("docker-compose.test.yml", "app/widget.spec.ts", "app/other.spec.ts")
+        }
+    finally:
+        edit_guard._blast_gate = real_blast_gate
+    ok &= record(
+        "81a: edit guard -- a claimed docker-compose.test.yml and a claimed app/widget.spec.ts go "
+        "through the claim gate; an unclaimed app/other.spec.ts is exempt as a test",
+        rcs == {"docker-compose.test.yml": 2, "app/widget.spec.ts": 2, "app/other.spec.ts": 0}
+        and gate_calls == [("docker-compose.test.yml", ["compose_test"]), ("app/widget.spec.ts", ["widget_spec"])],
+        f"rcs={rcs} calls={gate_calls}",
+    )
+
+    r3_claims = [{"id": "widget_spec", "path": "app/widget.spec.ts", "check": "tests/none.py::t"}]
+    r3_added = {"app/widget.spec.ts": ["export function priceWidget() {", "  return 1;", "}"]}
+    r3 = session_guard.rule_new_definitions(
+        FIXTURE, r3_claims, {"app/widget.spec.ts"}, r3_added, ["app/"], []
+    )
+    ok &= record(
+        "81b: session guard R3 -- a claimed app/widget.spec.ts is code, not a test: its new "
+        "definition is checked and its own text does not count as the test reference",
+        any("new definition priceWidget in app/widget.spec.ts" in msg for _, _, msg in r3),
+        str(r3),
+    )
+
+    identity_line = "\nClaude wrote this note.\n"  # gt-allow: fault-injection payload for the enabled:false selftest
+    disabled_block = "    runner: pytest\n  banned_words:\n    enabled: false\n"
+    with patched(status_path, "    runner: pytest\n", disabled_block), appended(readme_path, identity_line):
+        cp = verify("full")
+        ok &= record(
+            "82: meta.banned_words.enabled: false skips the scan with one WARN, no banned-word FAIL",
+            cp.returncode == 0
+            and "banned word" not in out(cp)
+            and "[WARN] - : banned-words scan disabled by meta.banned_words.enabled" in out(cp),
+            out(cp),
+        )
+
+    bad_enabled_block = "    runner: pytest\n  banned_words:\n    enabled: \"no\"\n"
+    with patched(status_path, "    runner: pytest\n", bad_enabled_block):
+        cp = verify("sync")
+        ok &= record(
+            "83: meta.banned_words.enabled that is not a bool -> exit 1",
+            cp.returncode == 1 and "meta.banned_words.enabled must be true or false" in out(cp),
+            out(cp),
+        )
+
+    html_a = FIXTURE / "services" / "alpha" / "page.html"
+    html_b = FIXTURE / "handlers" / "view.html"
+    css = FIXTURE / "handlers" / "view.css"
+    run_json = SCRATCH_BASE / "fixture-run.json"
+    (SCRATCH_BASE / "fixture-research").mkdir(exist_ok=True)
+    run_json.write_text(json.dumps({
+        "repo": str(FIXTURE), "research": str(SCRATCH_BASE / "fixture-research"),
+        "scratch": str(SCRATCH_BASE / "fixture-scratch"), "python": sys.executable,
+        "skill": str(SKILL_ROOT), "date": TODAY,
+    }))
+    expected = "3 files under roots have extensions outside meta.coverage.extensions (top: .html×2, .css×1)"
+    with added_file(html_a, "<p></p>\n"), added_file(html_b, "<p></p>\n"), added_file(css, "p {}\n"):
+        cp = verify("full")
+        facts_cp = run(["pipeline/stages/i9_install.py", "--run", str(run_json), "--facts"], SKILL_ROOT)
+        facts = json.loads(facts_cp.stdout) if facts_cp.returncode == 0 else {}
+        ok &= record(
+            "84: files under roots outside meta.coverage.extensions -> one WARN with the top "
+            "extensions, also in i9 --facts, never a FAIL",
+            cp.returncode == 0
+            and f"[WARN] - : {expected}" in out(cp)
+            and facts.get("coverage_other_extensions") == expected,
+            f"verify={out(cp)} facts={facts.get('coverage_other_extensions')!r} {facts_cp.stderr}",
+        )
+
+    nested = FIXTURE / "services" / "vendored"
+    nested.mkdir(parents=True)
+    try:
+        subprocess.run(["git", "init", "-q"], cwd=nested, check=True)
+        (nested / "lib.py").write_text("def vendored():\n    return 1\n")
+        cp = verify("full")
+        ok &= record(
+            "84a: an untracked nested git repository under roots -> one WARN naming it, no FAIL",
+            cp.returncode == 0
+            and out(cp).count("[WARN] - : nested repository under roots not scanned: services/vendored") == 1
+            and "vendored" not in "".join(l for l in out(cp).splitlines(True) if "[FAIL]" in l),
+            out(cp),
+        )
+    finally:
+        shutil.rmtree(nested, ignore_errors=True)
+
+    cp = verify("full")
+    density = re.findall(r"assertion density checked only for pytest claims; (\d+) claims skipped \(kinds: ([^)]*)\)", out(cp))
+    ok &= record(
+        "85: assertion density prints one summary WARN naming the claim kinds it did not check",
+        len(density) == 1 and density[0][1] == "go_test, js_test, probe" and int(density[0][0]) >= 3,
+        out(cp),
+    )
+    return ok
+
+
+def _i9_repo(name: str, files: dict[str, str], origin: str | None = None) -> tuple[Path, list[str]]:
+    repo = SCRATCH_BASE / f"i9-{name}-repo"
+    repo.mkdir(parents=True)
+    for rel, content in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(content)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    if origin:
+        subprocess.run(["git", "remote", "add", "origin", origin], cwd=repo, check=True)
+    research = SCRATCH_BASE / f"i9-{name}-research"
+    research.mkdir()
+    run_json = SCRATCH_BASE / f"i9-{name}-run.json"
+    run_json.write_text(json.dumps({
+        "repo": str(repo), "research": str(research),
+        "scratch": str(SCRATCH_BASE / f"i9-{name}-scratch"), "python": sys.executable,
+        "skill": str(SKILL_ROOT), "date": TODAY,
+    }))
+    return repo, ["pipeline/stages/i9_install.py", "--run", str(run_json)]
+
+
+def _plan_line(stdout: str, needle: str) -> str:
+    return next((l for l in stdout.splitlines() if needle in l), "")
+
+
+I9_JS_NO_RUNNER_WARN = "WARN js present, runner not detected -> bridge skipped, use a probe"
+
+I9_GITHUB_WORKFLOW = "name: {name}\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo {name}\n"
+
+
+def i9_portability_scenarios() -> bool:
+    """Installer facts and CI wiring on repos that are not python projects."""
+    ok = True
+
+    repo, args = _i9_repo("e2e-js", {
+        "package.json": '{"name": "root", "private": true}\n',
+        "backend/package.json": '{"name": "api", "devDependencies": {"jest": "^29.0.0"}}\n',
+        "node_modules/x/package.json": '{"devDependencies": {"vitest": "1"}}\n',
+        "e2e/tests/a.spec.ts": "test('a', () => {});\n",
+    })
+    facts = json.loads(run([*args, "--facts"], SKILL_ROOT).stdout)
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    ok &= record(
+        "86: a tests dir with only *.spec.ts is not a python runner; jest is found in "
+        "backend/package.json, not in node_modules",
+        facts["python_runner"]["detected"] is False
+        and facts["js"] == {"present": True, "runner": "jest", "package_json": "backend/package.json"}
+        and cp_write.returncode == 0
+        and not (repo / "e2e" / "tests" / "test_status_contract.py").exists()
+        and not (repo / "tests").exists(),
+        f"facts.python_runner={facts['python_runner']} js={facts['js']} write={out(cp_write)}",
+    )
+
+    repo, args = _i9_repo("js-no-runner", {"package.json": '{"name": "site", "scripts": {"build": "x"}}\n'})
+    cp_facts = run([*args, "--facts"], SKILL_ROOT)
+    cp_dry = run([*args, "--dry-run"], SKILL_ROOT)
+    ok &= record(
+        "87: package.json without jest/vitest -> the same WARN in --facts and in the dry-run plan",
+        I9_JS_NO_RUNNER_WARN in cp_facts.stderr
+        and json.loads(cp_facts.stdout)["js"]["runner"] is None
+        and I9_JS_NO_RUNNER_WARN in cp_dry.stdout,
+        f"facts_err={cp_facts.stderr!r} dry={cp_dry.stdout}",
+    )
+
+    repo, args = _i9_repo("multi-wf", {
+        ".github/workflows/build.yml": I9_GITHUB_WORKFLOW.format(name="build"),
+        ".github/workflows/deploy.yml": I9_GITHUB_WORKFLOW.format(name="deploy"),
+    })
+    facts = json.loads(run([*args, "--facts"], SKILL_ROOT).stdout)
+    cp_dry = run([*args, "--dry-run"], SKILL_ROOT)
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    cp_again = run([*args, "--dry-run"], SKILL_ROOT)
+    own = repo / ".github" / "workflows" / "ground-truth.yml"
+    own_text = own.read_text() if own.is_file() else ""
+    untouched = all(
+        (repo / ".github" / "workflows" / f"{n}.yml").read_text() == I9_GITHUB_WORKFLOW.format(name=n)
+        for n in ("build", "deploy")
+    )
+    changed_again = [l for l in cp_again.stdout.splitlines() if l.strip().startswith(("CREATE", "UPDATE"))]
+    ok &= record(
+        "88: several workflows and no --ci-file -> a separate ground-truth.yml; a second run changes nothing",
+        facts["ci"] == {"kind": "github", "path": ".github/workflows/ground-truth.yml", "create": True}
+        and _plan_line(cp_dry.stdout, "ground-truth.yml").strip().startswith("CREATE")
+        and cp_write.returncode == 0
+        and untouched
+        and "verify-status-contract:" in own_text
+        and _plan_line(cp_again.stdout, "ground-truth.yml").strip().startswith("OK")
+        and not changed_again,
+        f"facts.ci={facts['ci']} dry={cp_dry.stdout} again={cp_again.stdout}",
+    )
+
+    repo, args = _i9_repo("one-wf", {".github/workflows/ci.yml": I9_GITHUB_WORKFLOW.format(name="ci")})
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    cp_again = run([*args, "--dry-run"], SKILL_ROOT)
+    ci_text = (repo / ".github" / "workflows" / "ci.yml").read_text()
+    ok &= record(
+        "89: no python runner -> the inserted job installs pyyaml and pytest, not requirements-dev.txt, "
+        "no ripgrep; a second run reports the CI file OK",
+        cp_write.returncode == 0
+        and "verify-status-contract:" in ci_text
+        and "pip install pyyaml pytest" in ci_text
+        and "requirements-dev.txt" not in ci_text
+        and "ripgrep" not in ci_text
+        and ci_text.count("verify-status-contract:") == 1
+        and _plan_line(cp_again.stdout, "ci.yml").strip().startswith("OK"),
+        f"write={out(cp_write)} again={cp_again.stdout} ci={ci_text}",
+    )
+
+    repo, args = _i9_repo("gitlab-remote", {}, origin="https://gitlab.example.invalid/group/app.git")
+    facts = json.loads(run([*args, "--facts"], SKILL_ROOT).stdout)
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    cp_again = run([*args, "--dry-run"], SKILL_ROOT)
+    gl = repo / ".gitlab-ci.yml"
+    gl_text = gl.read_text() if gl.is_file() else ""
+    ok &= record(
+        "90: no CI file and a gitlab origin -> .gitlab-ci.yml is created from the job template "
+        "with an image: line; a second run reports it OK",
+        facts["ci"] == {"kind": "gitlab", "path": ".gitlab-ci.yml", "create": True}
+        and cp_write.returncode == 0
+        and gl_text.startswith("status-contract:\n  image: python:3.12-slim\n")
+        and "pip install pyyaml pytest" in gl_text
+        and "ripgrep" not in gl_text
+        and _plan_line(cp_again.stdout, ".gitlab-ci.yml").strip().startswith("OK"),
+        f"facts.ci={facts['ci']} write={out(cp_write)} again={cp_again.stdout}",
+    )
+
+    origins = {
+        "gh-gitlab-name": "https://github.com/acme/gitlab-exporter.git",
+        "gl-ssh": "git@gitlab.com:g/app.git",
+        "gl-https": "https://gitlab.example.invalid/group/app.git",
+    }
+    host_kinds = {}
+    for name, origin in origins.items():
+        _, args = _i9_repo(name, {}, origin=origin)
+        cp = run([*args, "--facts"], SKILL_ROOT)
+        host_kinds[name] = json.loads(cp.stdout)["ci"]["kind"] if cp.returncode == 0 else out(cp)
+    ok &= record(
+        "90a: gitlab is detected from the origin host only -- github.com/acme/gitlab-exporter is "
+        "not gitlab, git@gitlab.com and gitlab.example.invalid are",
+        host_kinds == {"gh-gitlab-name": "none", "gl-ssh": "gitlab", "gl-https": "gitlab"},
+        str(host_kinds),
+    )
+
+    repo, args = _i9_repo("gitlab-selfhosted", {}, origin="https://git.example.invalid/group/app.git")
+    ci_args = [*args, "--ci-file", ".gitlab-ci.yml"]
+    cp = run([*ci_args, "--facts"], SKILL_ROOT)
+    facts = json.loads(cp.stdout) if cp.returncode == 0 else {"ci": out(cp)}
+    cp_write = run([*ci_args, "--write"], SKILL_ROOT)
+    gl = repo / ".gitlab-ci.yml"
+    gl_text = gl.read_text() if gl.is_file() else ""
+    ok &= record(
+        "90b: a self-hosted GitLab host without 'gitlab' in its name plus --ci-file .gitlab-ci.yml "
+        "and no such file yet -> the file is created, same as for a detected gitlab origin",
+        facts["ci"] == {"kind": "gitlab", "path": ".gitlab-ci.yml", "create": True}
+        and cp_write.returncode == 0
+        and gl_text.startswith("status-contract:\n  image: python:3.12-slim\n"),
+        f"facts.ci={facts['ci']} write={out(cp_write)}",
+    )
+
+    repo, args = _i9_repo("no-status", {})
+    run_json = args[2]
+    missing = f"error: STATUS.yaml not found at {repo / 'STATUS.yaml'}; run ground-truth init first"
+    results = {}
+    for stage in ("audit_scope", "i5_build_args", "i10_build_args"):
+        cp = run([f"pipeline/stages/{stage}.py", "--run", run_json], SKILL_ROOT)
+        results[stage] = (cp.returncode, missing in cp.stderr, cp.stderr.strip()[-200:])
+    ok &= record(
+        "91: audit_scope, i5_build_args and i10_build_args without STATUS.yaml -> rc 1 and one "
+        "line telling to run init",
+        all(rc == 1 and seen for rc, seen, _ in results.values()),
+        str(results),
+    )
+    return ok
+
+
 def banned_word_self_scan() -> bool:
     """Prove templates/ and selftest/ themselves are clean of FAIL-level
     identity tokens, using the same scanner the templates ship."""
@@ -2404,6 +2795,7 @@ def main() -> int:
     ok &= edge_case_scenarios()
     ok &= junit_scenarios()
     ok &= cited_line_scenarios()
+    ok &= portability_scenarios()
     ok &= banned_word_self_scan()
 
     passed = sum(1 for _, o, _ in RESULTS if o)

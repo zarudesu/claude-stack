@@ -35,6 +35,24 @@ _DEBT_SEVERITY = {"blocking", "normal", "cosmetic"}
 _DEBT_STATE = {"open", "accepted", "resolved"}
 _DEBT_ALLOWED_KEYS = {"id", "ref", "description", "severity", "state", "owner", "opened"}
 _DEFAULT_EXTENSIONS = [".py", ".go", ".ts", ".tsx", ".js", ".sh", ".kt", ".java"]
+# Docs, media, data and lock files never hold code a claim would describe;
+# the WARN about extensions outside meta.coverage.extensions leaves them out
+# so the source files a repo's own language adds stay visible.
+_NON_CODE_EXTENSIONS = frozenset(
+    ".md .mdx .rst .adoc .txt .png .jpg .jpeg .gif .webp .svg .ico .pdf .mp3 .mp4 "
+    ".woff .woff2 .ttf .otf .eot .json .yml .yaml .toml .lock .csv .xml .ini .cfg "
+    ".env .example .gitkeep .map".split()
+)
+# What counts as a test file. A test carries no claim of its own -- it is
+# what a claim points at. gt_edit_guard.py keeps its own copy of these
+# constants and of _NON_CODE_EXTENSIONS (it must not import this module, see
+# its is_test_file); the selftest fails when the copies differ.
+# tests/ and __tests__/ count anywhere in the path; test/ and spec/ only as
+# the first segment or right after src/, so src/api/spec/ stays code.
+_TEST_DIR_NAMES = ("tests", "__tests__")
+_TEST_TOP_DIR_NAMES = ("test", "spec")
+_TEST_NAME_MARKERS = (".test.", ".spec.")
+_TEST_SUFFIX_RE = re.compile(r"_test\.[^./]+$")
 _STALE_DEFAULT_DAYS = 30
 # An audit older than this many days, or taken more than this many files ago,
 # no longer describes the repository it was written against.
@@ -118,6 +136,26 @@ _PROTECTED_ARTIFACT_PROBES = (
 )
 
 
+def is_test_path(rel: str) -> bool:
+    """True for a repo-relative path that is itself a test: under a tests or
+    __tests__ directory anywhere, under test/ or spec/ as the first segment
+    or right after src/, or a code file (extension outside
+    _NON_CODE_EXTENSIONS) named test_*, *_test.<ext>, *.test.* or *.spec.*."""
+    parts = Path(rel).as_posix().split("/")
+    dirs = parts[:-1]
+    if any(p in _TEST_DIR_NAMES for p in dirs):
+        return True
+    for i, p in enumerate(dirs):
+        if p in _TEST_TOP_DIR_NAMES and (i == 0 or dirs[i - 1] == "src"):
+            return True
+    name = parts[-1]
+    if Path(name).suffix.lower() in _NON_CODE_EXTENSIONS:
+        return False
+    if name.startswith("test_") or _TEST_SUFFIX_RE.search(name):
+        return True
+    return any(m in name for m in _TEST_NAME_MARKERS)
+
+
 def _covers_contract_artifacts(pattern: str) -> bool:
     return any(fnmatch.fnmatch(probe, pattern) for probe in _PROTECTED_ARTIFACT_PROBES)
 
@@ -161,12 +199,14 @@ def _git_ls_files(root: Path, include_untracked: bool = False) -> list[str]:
     include_untracked is set, so a banned word sitting in a new file is caught
     before that file is ever `git add`-ed."""
     args = (
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"]
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
         if include_untracked
-        else ["git", "ls-files"]
+        else ["git", "ls-files", "-z"]
     )
     try:
-        result = subprocess.run(args, cwd=root, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            args, cwd=root, capture_output=True, text=True, errors="surrogateescape", timeout=30
+        )
     except OSError as exc:
         raise GitUnavailable(f"could not run git ls-files: {exc}") from exc
     if result.returncode != 0:
@@ -175,7 +215,7 @@ def _git_ls_files(root: Path, include_untracked: bool = False) -> list[str]:
         )
     seen: set[str] = set()
     files: list[str] = []
-    for line in result.stdout.splitlines():
+    for line in result.stdout.split("\0"):
         if line and line not in seen:
             seen.add(line)
             files.append(line)
@@ -250,9 +290,15 @@ def check_shape(root: Path, data: dict) -> list[Issue]:
             if not isinstance(banned_words_cfg, dict):
                 issues.append(Issue("fail", "-", "meta.banned_words must be a mapping"))
             else:
-                for key in sorted(set(banned_words_cfg) - {"exclude"}):
+                for key in sorted(set(banned_words_cfg) - {"exclude", "enabled"}):
                     issues.append(
                         Issue("fail", "-", f"meta.banned_words has unknown key {key!r}")
+                    )
+                if "enabled" in banned_words_cfg and not isinstance(
+                    banned_words_cfg["enabled"], bool
+                ):
+                    issues.append(
+                        Issue("fail", "-", "meta.banned_words.enabled must be true or false")
                     )
                 exclude_cfg = banned_words_cfg.get("exclude")
                 if exclude_cfg is not None and not isinstance(exclude_cfg, list):
@@ -571,33 +617,61 @@ def check_coverage(root: Path, data: dict, mode: str = "full") -> list[Issue]:
     covered_paths = {p for _, p in claim_paths}
     covered_dirs = {p for _, p in claim_paths if p.is_dir()}
 
-    candidate_files: list[Path] = []
+    # A candidate file is resolved, so under a symlinked root ("src" ->
+    # "real/src") its repo-relative path spells the real directory and the
+    # written root never matches it -- the scan would then find nothing
+    # uncovered under that root at all. Both spellings count.
+    roots_expanded = list(roots)
     for r in roots:
-        base = root / r
-        if not base.exists():
+        prefix = _root_prefix(r)
+        if prefix is None:
             continue
-        for f in base.rglob("*"):
-            if not f.is_file():
-                continue
-            if f.suffix not in extensions:
-                continue
-            if "__pycache__" in f.parts:
-                continue
-            # The contract's own tree (verifier, probes, hooks) is never a
-            # coverage unit. A flat repository with roots ["."] would otherwise
-            # have to exclude it by glob, and that glob trips the 90% guard.
-            try:
-                rel_parts = f.relative_to(root).parts
-            except ValueError:
-                rel_parts = ()
-            if rel_parts[:2] == ("tools", "ground_truth"):
-                continue
-            name = f.name
-            if name.startswith("test_"):
-                continue
-            if name.endswith(f"_test{f.suffix}"):
-                continue
-            candidate_files.append(f.resolve())
+        resolved = (root_resolved / prefix).resolve()
+        if resolved == root_resolved or root_resolved in resolved.parents:
+            roots_expanded.append(resolved.relative_to(root_resolved).as_posix())
+    prefixes = [p for p in (_root_prefix(r) for r in roots_expanded) if p is not None]
+
+    # git decides what is part of the repository: tracked files plus untracked
+    # ones that are not ignored. A walk of the file system would also list
+    # node_modules, build output and nested worktrees.
+    try:
+        listed = _git_ls_files(root, include_untracked=True)
+    except GitUnavailable as exc:
+        issues.append(
+            Issue("fail", "-", f"could not enumerate files, coverage scan did not run: {exc}")
+        )
+        return issues
+
+    candidate_files: list[Path] = []
+    other_ext: list[tuple[str, str]] = []
+    for rel in listed:
+        if not any(_path_in_root(rel, prefix) for prefix in prefixes):
+            continue
+        rel_parts = rel.split("/")
+        if "__pycache__" in rel_parts or ".worktrees" in rel_parts:
+            continue
+        # The contract's own tree (verifier, probes, hooks) is never a
+        # coverage unit. A flat repository with roots ["."] would otherwise
+        # have to exclude it by glob, and that glob trips the 90% guard.
+        if rel_parts[:2] == ["tools", "ground_truth"]:
+            continue
+        # git lists an untracked nested repository (or a submodule's
+        # checkout) as one entry ending in "/" and never looks inside it.
+        if rel.endswith("/"):
+            issues.append(
+                Issue("warn", "-", f"nested repository under roots not scanned: {rel.rstrip('/')}")
+            )
+            continue
+        if is_test_path(rel):
+            continue
+        f = root / rel
+        if not f.is_file():
+            continue
+        if f.suffix not in extensions:
+            if f.suffix and f.suffix.lower() not in _NON_CODE_EXTENSIONS:
+                other_ext.append((rel, f.suffix))
+            continue
+        candidate_files.append(f.resolve())
 
     # fnmatch has no path-segment boundary ("*"/"**" translate the same way),
     # so a bare wildcard exclude silently swallows the whole coverage scan.
@@ -634,18 +708,27 @@ def check_coverage(root: Path, data: dict, mode: str = "full") -> list[Issue]:
                 )
 
     active_excludes = [pat for pat in str_excludes if pat.strip("*")]
-    # A candidate file is resolved, so under a symlinked root ("src" ->
-    # "real/src") its repo-relative path spells the real directory and the
-    # written root never matches it -- the scan would then find nothing
-    # uncovered under that root at all. Both spellings count.
-    roots_expanded = list(roots)
-    for r in roots:
-        prefix = _root_prefix(r)
-        if prefix is None:
-            continue
-        resolved = (root_resolved / prefix).resolve()
-        if resolved == root_resolved or root_resolved in resolved.parents:
-            roots_expanded.append(resolved.relative_to(root_resolved).as_posix())
+
+    # Files under the roots that the extension filter drops are invisible to
+    # the scan. Say how many there are once, so a language missing from
+    # meta.coverage.extensions shows up instead of reading as full coverage.
+    ext_counts: dict[str, int] = {}
+    for rel, suffix in other_ext:
+        if _under_coverage_roots(rel, roots_expanded, active_excludes):
+            ext_counts[suffix] = ext_counts.get(suffix, 0) + 1
+    if ext_counts:
+        top = sorted(ext_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+        issues.append(
+            Issue(
+                "warn",
+                "-",
+                f"{sum(ext_counts.values())} files under roots have extensions "
+                "outside meta.coverage.extensions (top: "
+                + ", ".join(f"{ext}\u00d7{n}" for ext, n in top)
+                + ")",
+            )
+        )
+
     units: list[Path] = []
     for f in candidate_files:
         rel = f.relative_to(root_resolved).as_posix()
@@ -1366,10 +1449,14 @@ def check_assertion_density(root: Path, data: dict, mode: str = "sync") -> list[
     # an unusable baseline once, and the same line twice helps nobody. With no
     # baseline every claim reads as pre-existing, so nothing is raised to FAIL.
     issues: list[Issue] = []
+    skipped_kinds: dict[str, int] = {}
     for claim in data.get("claims") or []:
         if not isinstance(claim, dict) or claim.get("kind") != "status":
             continue
         if claim.get("check_kind") != "pytest":
+            kind = claim.get("check_kind")
+            if isinstance(kind, str) and kind:
+                skipped_kinds[kind] = skipped_kinds.get(kind, 0) + 1
             continue
         cid = claim.get("id", "-")
         check = claim.get("check")
@@ -1393,6 +1480,16 @@ def check_assertion_density(root: Path, data: dict, mode: str = "sync") -> list[
                     )
                 else:
                     issues.append(Issue("warn", cid, f"{part}: test has no assertions"))
+    if skipped_kinds:
+        issues.append(
+            Issue(
+                "warn",
+                "-",
+                "assertion density checked only for pytest claims; "
+                f"{sum(skipped_kinds.values())} claims skipped "
+                f"(kinds: {', '.join(sorted(skipped_kinds))})",
+            )
+        )
     return issues
 
 
@@ -1696,6 +1793,12 @@ def check_no_banned_words(root: Path, data: dict) -> list[Issue]:
     issues: list[Issue] = []
     allowed: set[str] = set()
     meta = data.get("meta", {}) or {}
+    # A product or its docs can have a legitimate reason to name these words;
+    # such a repository turns the scan off explicitly, and every full run
+    # says so rather than going quiet.
+    banned_words_cfg = meta.get("banned_words")
+    if isinstance(banned_words_cfg, dict) and banned_words_cfg.get("enabled") is False:
+        return [Issue("warn", "-", "banned-words scan disabled by meta.banned_words.enabled")]
     if isinstance(meta.get("repo"), str):
         allowed.add(meta["repo"])
     for claim in data.get("claims") or []:
@@ -1713,7 +1816,6 @@ def check_no_banned_words(root: Path, data: dict) -> list[Issue]:
     # honored for STATUS.yaml / tools/ground_truth/** / tests/**, no matter how
     # it got past shape validation.
     exclude_entries: list[tuple[str, str]] = []
-    banned_words_cfg = meta.get("banned_words")
     if isinstance(banned_words_cfg, dict):
         exclude_cfg = banned_words_cfg.get("exclude")
         if isinstance(exclude_cfg, list):

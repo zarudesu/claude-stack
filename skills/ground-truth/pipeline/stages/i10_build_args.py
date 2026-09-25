@@ -134,6 +134,9 @@ def main(argv: list[str]) -> int:
 
     run = load_run(args.run)
     status_path = Path(args.status) if args.status else run.repo / "STATUS.yaml"
+    if not status_path.is_file():
+        print(f"error: STATUS.yaml not found at {status_path}; run ground-truth init first", file=sys.stderr)
+        return 1
     data = yaml.safe_load(status_path.read_text(encoding="utf-8")) or {}
     claims = data.get("claims") or []
     roots = ((data.get("meta") or {}).get("coverage") or {}).get("roots") or []

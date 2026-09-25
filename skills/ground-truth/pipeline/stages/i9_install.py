@@ -75,11 +75,19 @@ def _iter_subdirs(root: Path, max_depth: int):
             frontier.append((child, depth + 1))
 
 
-def _find_nested_python_marker(repo: Path) -> tuple[str, str] | None:
-    """First pytest.ini / conftest.py / tests dir found up to depth 2 below repo."""
+def _has_python_files(d: Path) -> bool:
+    return any(p.is_file() for p in d.rglob("*.py"))
+
+
+def _find_nested_python_marker(repo: Path, require_py: bool = True) -> tuple[str, str] | None:
+    """First pytest.ini / conftest.py / tests dir found up to depth 2 below repo.
+
+    A tests dir alone says "python" only when it holds a *.py file: e2e/tests
+    full of *.spec.ts is a JS suite. require_py=False is for placing the
+    bridge test once python was already detected by a config file."""
     for d in _iter_subdirs(repo, max_depth=2):
         rel = d.relative_to(repo).as_posix()
-        if d.name == "tests":
+        if d.name == "tests" and (not require_py or _has_python_files(d)):
             return "tests_dir", rel
         if (d / "pytest.ini").is_file():
             return "pytest.ini", rel
@@ -91,7 +99,7 @@ def _find_nested_python_marker(repo: Path) -> tuple[str, str] | None:
 def _resolve_tests_dir(repo: Path) -> str:
     if (repo / "tests").is_dir():
         return "tests"
-    nested = _find_nested_python_marker(repo)
+    nested = _find_nested_python_marker(repo, require_py=False)
     return nested[1] if nested else "tests"
 
 
@@ -107,7 +115,7 @@ def _detect_python_runner(repo: Path) -> dict:
     tx = repo / "tox.ini"
     if tx.is_file() and "[pytest]" in tx.read_text(encoding="utf-8", errors="ignore"):
         return {"detected": True, "via": "tox.ini", "tests_dir": _resolve_tests_dir(repo)}
-    if (repo / "tests").is_dir():
+    if (repo / "tests").is_dir() and _has_python_files(repo / "tests"):
         return {"detected": True, "via": "tests_dir", "tests_dir": "tests"}
     nested = _find_nested_python_marker(repo)
     if nested:
@@ -116,22 +124,39 @@ def _detect_python_runner(repo: Path) -> dict:
     return {"detected": False, "via": None, "tests_dir": None}
 
 
-def _detect_js_runner(repo: Path) -> dict:
-    pkg = repo / "package.json"
-    if not pkg.is_file():
-        return {"present": False, "runner": None}
+def _js_runner_of(pkg: Path) -> str | None:
     try:
         data = json.loads(pkg.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"present": True, "runner": None}
+        return None
+    if not isinstance(data, dict):
+        return None
     deps = {}
     for key in ("dependencies", "devDependencies"):
         deps.update(data.get(key) or {})
     if "vitest" in deps:
-        return {"present": True, "runner": "vitest"}
+        return "vitest"
     if "jest" in deps:
-        return {"present": True, "runner": "jest"}
-    return {"present": True, "runner": None}
+        return "jest"
+    return None
+
+
+def _detect_js_runner(repo: Path) -> dict:
+    """package.json at the root or up to two levels below it (a monorepo keeps
+    its jest config in backend/ or apps/web/); the root one wins, then the
+    first nested one that names jest or vitest."""
+    found = [repo / "package.json"] if (repo / "package.json").is_file() else []
+    found += [d / "package.json" for d in _iter_subdirs(repo, max_depth=2) if (d / "package.json").is_file()]
+    if not found:
+        return {"present": False, "runner": None, "package_json": None}
+    for pkg in found:
+        runner = _js_runner_of(pkg)
+        if runner:
+            return {"present": True, "runner": runner, "package_json": pkg.relative_to(repo).as_posix()}
+    return {"present": True, "runner": None, "package_json": None}
+
+
+JS_NO_RUNNER_WARN = "WARN js present, runner not detected -> bridge skipped, use a probe"
 
 
 def _detect_java_package(test_root: Path) -> str | None:
@@ -160,6 +185,10 @@ def _detect_maven(repo: Path) -> dict:
 def _detect_ci(repo: Path, ci_file: str | None = None) -> dict:
     if ci_file:
         path = repo / ci_file
+        if ci_file == ".gitlab-ci.yml" and not path.exists():
+            # A GitLab host i9 cannot recognise by name: the job becomes the
+            # whole file, same as for a detected gitlab origin.
+            return {"kind": "gitlab", "path": ci_file, "create": True}
         if not path.is_file():
             raise FileNotFoundError(f"--ci-file {ci_file!r} does not exist in the repo")
         kind = "gitlab" if ci_file == ".gitlab-ci.yml" else "github"
@@ -168,11 +197,44 @@ def _detect_ci(repo: Path, ci_file: str | None = None) -> dict:
     gh_files = []
     if gh_dir.is_dir():
         gh_files = sorted(gh_dir.glob("*.yml")) + sorted(gh_dir.glob("*.yaml"))
-    if gh_files:
+    # A workflow that already carries the job wins, so a second install
+    # finds the job where the first one put it.
+    for f in gh_files:
+        if "verify-status-contract:" in f.read_text(encoding="utf-8", errors="ignore"):
+            return {"kind": "github", "path": str(f.relative_to(repo))}
+    if len(gh_files) == 1:
         return {"kind": "github", "path": str(gh_files[0].relative_to(repo))}
+    if gh_files:
+        # Several workflows and no --ci-file: picking one by name is a guess,
+        # a workflow of its own is not.
+        return {"kind": "github", "path": GITHUB_OWN_WORKFLOW, "create": True}
     if (repo / ".gitlab-ci.yml").is_file():
         return {"kind": "gitlab", "path": ".gitlab-ci.yml"}
+    if _is_gitlab_host(_origin_url(repo)):
+        return {"kind": "gitlab", "path": ".gitlab-ci.yml", "create": True}
     return {"kind": "none", "path": None}
+
+
+GITHUB_OWN_WORKFLOW = ".github/workflows/ground-truth.yml"
+
+
+def _is_gitlab_host(url: str) -> bool:
+    """The remote's host names gitlab. Only the host counts: a GitHub repo
+    called gitlab-exporter is still GitHub. A self-hosted GitLab without
+    "gitlab" in its host name is not recognised; pass --ci-file for it."""
+    m = re.search(r"(?:@|//)([^/:]+)", url)
+    return bool(m) and "gitlab" in m.group(1).lower()
+
+
+def _origin_url(repo: Path) -> str:
+    """git remote get-url origin, or "" when there is no such remote."""
+    try:
+        cp = subprocess.run(
+            ["git", "remote", "get-url", "origin"], cwd=repo, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return cp.stdout.strip() if cp.returncode == 0 else ""
 
 
 _CACHE_PREFIXES = ("$CI_PROJECT_DIR/", "${CI_PROJECT_DIR}/", "$GITHUB_WORKSPACE/", "${{ github.workspace }}/")
@@ -268,7 +330,10 @@ def gather_facts(repo: Path, ci_file: str | None = None) -> dict:
     hooks_dir = ".claude/hooks" if claude_tracked else "tools/ground_truth/hooks"
     settings_file = ".claude/settings.json" if claude_tracked else ".claude/settings.local.json"
     ci = _detect_ci(repo, ci_file)
-    cache_paths = _ci_cache_paths(ci["kind"], (repo / ci["path"]).read_text(encoding="utf-8")) if ci["path"] else []
+    ci_path = repo / ci["path"] if ci["path"] else None
+    cache_paths = (
+        _ci_cache_paths(ci["kind"], ci_path.read_text(encoding="utf-8")) if ci_path and ci_path.is_file() else []
+    )
     return {
         "claude_tracked": claude_tracked,
         "hooks_dir": hooks_dir,
@@ -284,7 +349,34 @@ def gather_facts(repo: Path, ci_file: str | None = None) -> dict:
         "js": _detect_js_runner(repo),
         "maven": _detect_maven(repo),
         "venv_python": (repo / ".venv" / "bin" / "python").exists(),
+        "coverage_other_extensions": _coverage_other_extensions(repo),
     }
+
+
+def _coverage_other_extensions(repo: Path) -> str | None:
+    """The verifier's WARN about files under meta.coverage.roots that
+    meta.coverage.extensions leaves out, when STATUS.yaml already exists."""
+    status = repo / "STATUS.yaml"
+    if not status.is_file():
+        return None
+    templates = str(Path(__file__).resolve().parent.parent.parent / "templates")
+    sys.path.insert(0, templates)
+    saved_flag = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True  # templates/ ships to repos, keep it free of __pycache__
+    try:
+        import contract_lib  # noqa: E402
+
+        data = yaml.safe_load(status.read_text(encoding="utf-8")) or {}
+        issues = contract_lib.check_coverage(repo, data, "sync") if isinstance(data, dict) else []
+    except Exception:  # a broken STATUS.yaml is verify's to report, not this fact's
+        return None
+    finally:
+        sys.dont_write_bytecode = saved_flag
+        sys.path.remove(templates)
+    for issue in issues:
+        if "extensions outside meta.coverage.extensions" in issue.message:
+            return issue.message
+    return None
 
 
 # ------------------------------------------------------------- file sync --
@@ -488,6 +580,7 @@ def _strip_comment_lines(text: str) -> str:
 
 
 _MAVEN_IMAGE_DEFAULT = "maven:3.9-eclipse-temurin-21"
+_GITLAB_PYTHON_IMAGE = "python:3.12-slim"
 
 
 def _maven_ci_addition(repo_ci_text: str, addition: str) -> str:
@@ -509,9 +602,47 @@ def _maven_ci_addition(repo_ci_text: str, addition: str) -> str:
     )
 
 
+_PIP_PROJECT_LINE = "pip install -r requirements-dev.txt"
+_PIP_VERIFIER_LINE = "pip install pyyaml pytest"
+
+
+def _pip_line(addition: str, facts: dict) -> str:
+    """A repo with no python test runner has no requirements-dev.txt to
+    install; the verifier itself needs only pyyaml and pytest."""
+    if facts["python_runner"]["detected"]:
+        return addition
+    return addition.replace(_PIP_PROJECT_LINE, _PIP_VERIFIER_LINE)
+
+
+def _gitlab_addition(templates_dir: Path, facts: dict, repo_ci_text: str) -> str:
+    addition = _strip_comment_lines((templates_dir / "ci-gitlab-addition.yml").read_text(encoding="utf-8"))
+    if facts["maven"]["present"]:
+        addition = _maven_ci_addition(repo_ci_text, addition)
+    return _pip_line(addition, facts)
+
+
 def plan_ci(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[str, str]:
     ci = facts["ci"]
-    if ci["kind"] == "github":
+    if ci["kind"] == "gitlab" and ci.get("create"):
+        # No CI file yet and origin is a GitLab remote: the job becomes the
+        # whole .gitlab-ci.yml (the "test" stage it names is a GitLab default).
+        rel = ci["path"]
+
+        def transform(data: bytes) -> bytes:
+            text = _gitlab_addition(templates_dir, facts, "")
+            if not facts["maven"]["present"]:
+                # A new file has no default image to inherit; the maven
+                # branch already set its own.
+                text = re.sub(
+                    r"(?m)^(status-contract:[ \t]*\r?\n)",
+                    lambda m: m.group(1) + f"  image: {_GITLAB_PYTHON_IMAGE}\n",
+                    text,
+                    count=1,
+                )
+            return text.encode("utf-8")
+
+        return sync_file(templates_dir / "ci-gitlab-addition.yml", repo / rel, write, transform=transform), rel
+    if ci["kind"] == "github" and not ci.get("create"):
         rel = ci["path"]
         path = repo / rel
         text = path.read_text(encoding="utf-8")
@@ -521,6 +652,7 @@ def plan_ci(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[
         if not m:
             return "FAIL", f"{rel}: no top-level 'jobs:' key found, add the job manually"
         addition = _strip_comment_lines((templates_dir / "ci-github-job-addition.yml").read_text(encoding="utf-8"))
+        addition = _pip_line(addition, facts)
         new_text = text[:m.end()] + addition + text[m.end():]
         if write:
             path.write_text(new_text, encoding="utf-8")
@@ -531,16 +663,15 @@ def plan_ci(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[
         text = path.read_text(encoding="utf-8")
         if re.search(r"(?m)^status-contract:", text):
             return _plan_ci_existing(path, rel, text, write)
-        addition = _strip_comment_lines((templates_dir / "ci-gitlab-addition.yml").read_text(encoding="utf-8"))
-        if facts["maven"]["present"]:
-            addition = _maven_ci_addition(text, addition)
+        addition = _gitlab_addition(templates_dir, facts, text)
         new_text = text.rstrip("\n") + "\n\n" + addition
         if write:
             path.write_text(new_text, encoding="utf-8")
         return "UPDATE", rel
-    rel = str(Path(".github") / "workflows" / "ground-truth.yml")
+    rel = GITHUB_OWN_WORKFLOW
     dst = repo / rel
-    verb = sync_file(templates_dir / "ci-github.yml", dst, write)
+    transform = lambda data: _pip_line(data.decode("utf-8"), facts).encode("utf-8")
+    verb = sync_file(templates_dir / "ci-github.yml", dst, write, transform=transform)
     return verb, rel
 
 
@@ -667,7 +798,7 @@ def _ci_job_drift(repo: Path, facts: dict) -> dict:
     repo to replace the example dependency and env lines with its own.
     """
     ci = facts["ci"]
-    rel = ci["path"] or str(Path(".github") / "workflows" / "ground-truth.yml")
+    rel = ci["path"] or GITHUB_OWN_WORKFLOW
     target = repo / rel
     if not target.is_file():
         return {"path": rel, "status": "missing"}
@@ -745,7 +876,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--ci-file",
         help="repo-relative workflow file (or .gitlab-ci.yml) to receive the job, "
-        "overriding auto-detection when the repo has more than one workflow",
+        "overriding auto-detection when the repo has more than one workflow; "
+        ".gitlab-ci.yml is created when missing (a GitLab host without 'gitlab' in its name)",
     )
     args = parser.parse_args(argv)
 
@@ -756,8 +888,11 @@ def main(argv: list[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    js_warn = facts["js"]["present"] and facts["js"]["runner"] is None
     if args.facts:
         print(json.dumps(facts, indent=2))
+        if js_warn:
+            print(JS_NO_RUNNER_WARN, file=sys.stderr)
         return 0
 
     write = bool(args.write)
@@ -816,6 +951,7 @@ def main(argv: list[str]) -> int:
             verb = sync_file(templates_dir / TS_BRIDGE, dst, write)
             report.append((verb, f"{args.js_test_dir}/status_contract.test.ts"))
 
+
     hooks_dir = run.repo / facts["hooks_dir"]
     for name in HOOK_FILES:
         verb = sync_file(templates_dir / name, hooks_dir / name, write, chmod_x=True)
@@ -843,6 +979,8 @@ def main(argv: list[str]) -> int:
     print(f"ground-truth install, {mode}:")
     for verb, detail in report:
         print(f"  {verb:14s} {detail}")
+    if js_warn:
+        print(JS_NO_RUNNER_WARN)
 
     if any(v == "FAIL" for v, _ in report):
         return 1

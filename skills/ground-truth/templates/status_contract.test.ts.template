@@ -24,14 +24,24 @@ function findRepoRoot(startDir: string): string {
 
 describe("status contract", () => {
   test("verify.py --mode=sync passes", () => {
-    const root = findRepoRoot(__dirname);
-    const python = spawnSync("python3", ["tools/ground_truth/verify.py", "--mode=sync"], {
+    // __dirname exists only under CommonJS; an ESM test file starts from the
+    // runner's cwd, which is inside the repo, and walks up the same way.
+    const root = findRepoRoot(typeof __dirname !== "undefined" ? __dirname : process.cwd());
+    // GT_PYTHON points at a venv interpreter when pyyaml is not installed
+    // for the system python3.
+    const interpreter = process.env.GT_PYTHON || "python3";
+    const python = spawnSync(interpreter, ["tools/ground_truth/verify.py", "--mode=sync"], {
       cwd: root,
       encoding: "utf-8",
     });
 
     if (python.error && (python.error as NodeJS.ErrnoException).code === "ENOENT") {
-      // python3 not on PATH in this environment -- nothing to bridge to.
+      if (process.env.GT_PYTHON) {
+        // An interpreter was named explicitly and is not there: that is a
+        // broken setup, not a machine without python.
+        throw new Error(`GT_PYTHON=${interpreter} not found (ENOENT)`);
+      }
+      // no python interpreter in this environment -- nothing to bridge to.
       return;
     }
 
