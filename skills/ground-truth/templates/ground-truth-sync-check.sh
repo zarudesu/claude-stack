@@ -63,8 +63,12 @@ status_file="$root/STATUS.yaml"
 py="${GT_PYTHON:-}"
 [ -z "$py" ] && { [ -x "$root/.venv/bin/python" ] && py="$root/.venv/bin/python" || py="python3"; }
 
-# Run before the clean-tree/STATUS shortcut: another session may have committed
-# changes, or edited a separately registered repository outside this git tree.
+# A session that left the tree clean has nothing to hand off: it is never
+# blocked here. Committed or sibling-repo drift is still reported by the
+# SessionStart memory status and failed by the CI memory check.
+git -C "$root" status --porcelain 2>/dev/null | grep -q . || exit 0
+# Memory runs before the STATUS shortcut: a memory-only repo has no STATUS.yaml.
+# No helper installed (no .ground-truth/model.yaml at install time) -> skipped.
 memory="$root/tools/ground_truth/gt_context.py"
 if [ -f "$memory" ]; then
   "$py" "$memory" hook --event stop
@@ -72,7 +76,6 @@ if [ -f "$memory" ]; then
   [ "$memory_rc" -ne 0 ] && exit 2
 fi
 [ -f "$status_file" ] || exit 0
-git -C "$root" status --porcelain 2>/dev/null | grep -q . || exit 0
 verifier="$root/tools/ground_truth/verify.py"
 [ -f "$verifier" ] || exit 0
 

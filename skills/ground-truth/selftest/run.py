@@ -2639,6 +2639,71 @@ def i9_portability_scenarios() -> bool:
         all(rc == 1 and seen for rc, seen, _ in results.values()),
         str(results),
     )
+
+    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
+    import i9_install  # noqa: E402
+
+    memory_skip = "SKIP           " + i9_install.MEMORY_SKIP
+    own_rule = "# team rule\nKeep the hand-written text.\n"
+    repo, args = _i9_repo("no-model", {
+        ".github/workflows/ci.yml": I9_GITHUB_WORKFLOW.format(name="ci"),
+        ".claude/rules/ground-truth.md": own_rule,
+    })
+    cp_dry = run([*args, "--dry-run"], SKILL_ROOT)
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    cp_again = run([*args, "--dry-run"], SKILL_ROOT)
+    ci_text = (repo / ".github" / "workflows" / "ci.yml").read_text()
+    drift = i9_install.drift_report(repo, i9_install.gather_facts(repo), TEMPLATES)
+    gl_repo, gl_args = _i9_repo("no-model-gl", {}, origin="https://gitlab.example.invalid/group/app.git")
+    cp_gl = run([*gl_args, "--write"], SKILL_ROOT)
+    gl_rule = gl_repo / ".claude" / "rules" / "ground-truth.md"
+    gl_rule_text = gl_rule.read_text() if gl_rule.is_file() else ""
+    gl_ci = gl_repo / ".gitlab-ci.yml"
+    gl_ci_text = gl_ci.read_text() if gl_ci.is_file() else ""
+    ok &= record(
+        "92: no .ground-truth/model.yaml -> one SKIP project memory line, no gt_context.py, no CI "
+        "memory step, an existing rule file untouched, a new rule is the STATUS-only one; "
+        "drift and a second run agree nothing is left to do",
+        cp_write.returncode == 0
+        and all(cp.stdout.count(memory_skip) == 1 for cp in (cp_dry, cp_write, cp_again, cp_gl))
+        and "gt_context" not in cp_dry.stdout.replace(i9_install.MEMORY_SKIP, "")
+        and not (repo / "tools" / "ground_truth" / "gt_context.py").exists()
+        and (repo / "tools" / "ground_truth" / "verify.py").is_file()
+        and "verify-status-contract:" in ci_text
+        and "gt_context" not in ci_text
+        and (repo / ".claude" / "rules" / "ground-truth.md").read_text() == own_rule
+        and not [l for l in cp_again.stdout.splitlines() if l.strip().startswith(("CREATE", "UPDATE"))]
+        and all(d["status"] == "same" for d in drift)
+        and cp_gl.returncode == 0
+        and "status-contract:" in gl_ci_text and "gt_context" not in gl_ci_text
+        and "verify.py --mode=sync" in gl_rule_text and "gt_context" not in gl_rule_text
+        and "{{PY}}" not in gl_rule_text and not gl_rule_text.startswith("<!--"),
+        f"dry={cp_dry.stdout} again={cp_again.stdout} drift={drift} gl={out(cp_gl)} ci={ci_text}",
+    )
+
+    model = {"version": 1, "repositories": {"app": {"path": "."}},
+             "areas": [{"id": "app", "repo": "app", "summary": "app route", "sources": ["src"],
+                        "docs": ["docs/context.md"], "depends_on": [], "entrypoints": ["src/core.py"],
+                        "checks": ["appropriate project tests"], "unknowns": []}]}
+    repo, args = _i9_repo("with-model", {
+        ".github/workflows/ci.yml": I9_GITHUB_WORKFLOW.format(name="ci"),
+        ".ground-truth/model.yaml": json.dumps(model, indent=1) + "\n",
+        "src/core.py": "VALUE = 1\n",
+        "docs/context.md": "app: canonical behavior and constraints\n",
+    })
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    ci_text = (repo / ".github" / "workflows" / "ci.yml").read_text()
+    rule = repo / ".claude" / "rules" / "ground-truth.md"
+    ok &= record(
+        "93: with .ground-truth/model.yaml -> gt_context.py installed, the CI memory step and the "
+        "memory rule are in place, no SKIP project memory line",
+        cp_write.returncode == 0
+        and i9_install.MEMORY_SKIP not in cp_write.stdout
+        and (repo / "tools" / "ground_truth" / "gt_context.py").is_file()
+        and "python3 tools/ground_truth/gt_context.py check" in ci_text
+        and rule.is_file() and "gt_context.py list" in rule.read_text(),
+        f"write={out(cp_write)} ci={ci_text}",
+    )
     return ok
 
 

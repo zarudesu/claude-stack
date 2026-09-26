@@ -53,6 +53,14 @@ GO_BRIDGE = "status_contract_test.go.template"
 TS_BRIDGE = "status_contract.test.ts.template"
 JAVA_BRIDGE = "status_contract_test.java.template"
 RULE_FILE = "ground-truth.rule.md"
+# Rule and tool for repos with project memory; without a model the helper is
+# not installed and the rule is the STATUS-only one.
+STATUS_ONLY_RULE_FILE = "ground-truth.rule.status-only.md"
+MEMORY_TOOL = "gt_context.py"
+MEMORY_SKIP = (
+    "project memory: no .ground-truth/model.yaml "
+    "(STATUS-only contract; run ground-truth init to add memory)"
+)
 
 _INSTALLER_COMMENT_RE = re.compile(r"^<!--.*?-->\s*\n+", re.S)
 
@@ -350,7 +358,28 @@ def gather_facts(repo: Path, ci_file: str | None = None) -> dict:
         "maven": _detect_maven(repo),
         "venv_python": (repo / ".venv" / "bin" / "python").exists(),
         "coverage_other_extensions": _coverage_other_extensions(repo),
+        "project_memory": _has_project_memory(repo),
     }
+
+
+def _has_project_memory(repo: Path) -> bool:
+    """Whether the installed gt_context.py would find a model from this repo:
+    its own discover() decides, so the installer and the helper agree. A
+    workspace pointer whose target has no model still counts -- the pointer
+    says memory was set up, and the installed check reports it broken."""
+    templates = str(Path(__file__).resolve().parent.parent.parent / "templates")
+    sys.path.insert(0, templates)
+    saved_flag = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True  # templates/ ships to repos, keep it free of __pycache__
+    try:
+        import gt_context  # noqa: E402
+
+        return gt_context.discover(repo) is not None
+    except ValueError:
+        return True
+    finally:
+        sys.dont_write_bytecode = saved_flag
+        sys.path.remove(templates)
 
 
 def _coverage_other_extensions(repo: Path) -> str | None:
@@ -423,6 +452,27 @@ def _resolve_rule(data: bytes, py: str) -> bytes:
     return text.encode("utf-8")
 
 
+def _tools_files(facts: dict) -> list[str]:
+    return TOOLS_FILES if facts["project_memory"] else [n for n in TOOLS_FILES if n != MEMORY_TOOL]
+
+
+def sync_rule(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[str, str]:
+    """The rule file: the memory rule when the repo has a model. Without one
+    an existing rule is left as it is -- it may be a hand-written or an
+    earlier installed memory rule -- and a missing one becomes the
+    STATUS-only rule, which names no gt_context.py command."""
+    rel = ".claude/rules/ground-truth.md"
+    dst = repo / rel
+    py = ".venv/bin/python" if facts["venv_python"] else "python3"
+    transform = lambda data, py=py: _resolve_rule(data, py)
+    if facts["project_memory"]:
+        return sync_file(templates_dir / RULE_FILE, dst, write, transform=transform), rel
+    if dst.is_file():
+        verb = sync_file(templates_dir / STATUS_ONLY_RULE_FILE, dst, write=False, transform=transform)
+        return (verb, rel) if verb == "OK" else ("SKIP", f"{rel} (present, left as is: no project memory)")
+    return sync_file(templates_dir / STATUS_ONLY_RULE_FILE, dst, write, transform=transform), rel
+
+
 # ----------------------------------------------------- settings / CI / pc --
 
 def _settings_addition(templates_dir: Path, hooks_dir: str) -> dict:
@@ -493,9 +543,10 @@ def plan_settings(repo: Path, facts: dict, templates_dir: Path, write: bool) -> 
 # only these decide whether a job that is already in the file is up to date,
 # and only these get appended to a job installed before they existed.
 CI_VERIFY_COMMAND = "tools/ground_truth/verify.py --mode=full"
+CI_MEMORY_COMMAND = "tools/ground_truth/gt_context.py check"
 CI_EXTRA_COMMANDS = [
     ("# project memory: missing model, stale evidence or missing repositories fail closed",
-     "tools/ground_truth/gt_context.py check"),
+     CI_MEMORY_COMMAND),
     ("# citations in STATUS.yaml must still point at the right line after this diff",
      'tools/ground_truth/remap_line_refs.py --check --base "${GT_BASE_REF:-HEAD~1}" STATUS.yaml'),
     ("# canaries: every claim carrying a mutation still goes red under it",
@@ -511,17 +562,33 @@ _CI_VERIFY_LINE_RE = re.compile(
 )
 
 
-def _ci_missing_commands(text: str) -> list[tuple[str, str]]:
-    return [(comment, cmd) for comment, cmd in CI_EXTRA_COMMANDS if cmd not in text]
+# The commands a repo without project memory gets: the memory check would
+# fail on every run until ground-truth init writes the model.
+CI_STATUS_ONLY_COMMANDS = [c for c in CI_EXTRA_COMMANDS if c[1] != CI_MEMORY_COMMAND]
+_CI_MEMORY_LINE_RE = re.compile(r"(?m)^[^\n]*" + re.escape(CI_MEMORY_COMMAND) + r"[^\n]*\n")
 
 
-def _ci_add_commands(text: str) -> str | None:
+def _ci_commands(facts: dict) -> list[tuple[str, str]]:
+    return CI_EXTRA_COMMANDS if facts["project_memory"] else CI_STATUS_ONLY_COMMANDS
+
+
+def _ci_template(text: str, facts: dict) -> str:
+    """A CI template as this repo gets it: without the memory step when the
+    repo has no model."""
+    return text if facts["project_memory"] else _CI_MEMORY_LINE_RE.sub("", text)
+
+
+def _ci_missing_commands(text: str, commands: list[tuple[str, str]] = CI_EXTRA_COMMANDS) -> list[tuple[str, str]]:
+    return [(comment, cmd) for comment, cmd in commands if cmd not in text]
+
+
+def _ci_add_commands(text: str, commands: list[tuple[str, str]] = CI_EXTRA_COMMANDS) -> str | None:
     """Add the verifier commands an already-installed CI job does not run yet,
     next to the verify.py line it does run. Returns None when that line is not
     in a shape this can extend, or when the result would not parse as YAML --
     such a job is hand-written enough that guessing is worse than saying so.
     """
-    missing = _ci_missing_commands(text)
+    missing = _ci_missing_commands(text, commands)
     if not missing:
         return text
     lines = text.splitlines(keepends=True)
@@ -553,14 +620,15 @@ def _ci_add_commands(text: str) -> str | None:
     return None
 
 
-def _plan_ci_existing(path: Path, rel: str, text: str, write: bool) -> tuple[str, str]:
+def _plan_ci_existing(path: Path, rel: str, text: str, write: bool,
+                      commands: list[tuple[str, str]] = CI_EXTRA_COMMANDS) -> tuple[str, str]:
     """The job is already in this CI file: bring the commands it runs up to
     date instead of reporting OK on the job name alone, otherwise a command
     added to the templates never reaches a repo that installed once."""
-    missing = _ci_missing_commands(text)
+    missing = _ci_missing_commands(text, commands)
     if not missing:
         return "OK", rel
-    new_text = _ci_add_commands(text)
+    new_text = _ci_add_commands(text, commands)
     if new_text is None:
         return "FAIL", (
             f"{rel}: the job is present but its {CI_VERIFY_COMMAND} line could not be "
@@ -616,6 +684,7 @@ def _pip_line(addition: str, facts: dict) -> str:
 
 def _gitlab_addition(templates_dir: Path, facts: dict, repo_ci_text: str) -> str:
     addition = _strip_comment_lines((templates_dir / "ci-gitlab-addition.yml").read_text(encoding="utf-8"))
+    addition = _ci_template(addition, facts)
     if facts["maven"]["present"]:
         addition = _maven_ci_addition(repo_ci_text, addition)
     return _pip_line(addition, facts)
@@ -647,12 +716,12 @@ def plan_ci(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[
         path = repo / rel
         text = path.read_text(encoding="utf-8")
         if "verify-status-contract:" in text:
-            return _plan_ci_existing(path, rel, text, write)
+            return _plan_ci_existing(path, rel, text, write, _ci_commands(facts))
         m = re.search(r"(?m)^jobs:[ \t]*\r?\n", text)
         if not m:
             return "FAIL", f"{rel}: no top-level 'jobs:' key found, add the job manually"
         addition = _strip_comment_lines((templates_dir / "ci-github-job-addition.yml").read_text(encoding="utf-8"))
-        addition = _pip_line(addition, facts)
+        addition = _pip_line(_ci_template(addition, facts), facts)
         new_text = text[:m.end()] + addition + text[m.end():]
         if write:
             path.write_text(new_text, encoding="utf-8")
@@ -662,7 +731,7 @@ def plan_ci(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[
         path = repo / rel
         text = path.read_text(encoding="utf-8")
         if re.search(r"(?m)^status-contract:", text):
-            return _plan_ci_existing(path, rel, text, write)
+            return _plan_ci_existing(path, rel, text, write, _ci_commands(facts))
         addition = _gitlab_addition(templates_dir, facts, text)
         new_text = text.rstrip("\n") + "\n\n" + addition
         if write:
@@ -670,7 +739,7 @@ def plan_ci(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tuple[
         return "UPDATE", rel
     rel = GITHUB_OWN_WORKFLOW
     dst = repo / rel
-    transform = lambda data: _pip_line(data.decode("utf-8"), facts).encode("utf-8")
+    transform = lambda data: _pip_line(_ci_template(data.decode("utf-8"), facts), facts).encode("utf-8")
     verb = sync_file(templates_dir / "ci-github.yml", dst, write, transform=transform)
     return verb, rel
 
@@ -803,7 +872,7 @@ def _ci_job_drift(repo: Path, facts: dict) -> dict:
     if not target.is_file():
         return {"path": rel, "status": "missing"}
     text = target.read_text(encoding="utf-8")
-    if CI_JOB_MARKER not in text or CI_VERIFY_COMMAND not in text or _ci_missing_commands(text):
+    if CI_JOB_MARKER not in text or CI_VERIFY_COMMAND not in text or _ci_missing_commands(text, _ci_commands(facts)):
         return {"path": rel, "status": "outdated"}
     return {"path": rel, "status": "same"}
 
@@ -832,13 +901,15 @@ def drift_report(repo: Path, facts: dict, templates_dir: Path) -> list[dict]:
     TOOLS_FILES, the example probe, HOOK_FILES and the rule file (the same
     _resolve_rule transform i9_install applies); a command-presence check for
     the CI job and the settings hooks block, since i9_install inserts those
-    into a file it does not fully own. install and audit share this one
+    into a file it does not fully own. Without project memory gt_context.py
+    and its CI step are not expected, and a rule file install leaves alone
+    counts as same. install and audit share this one
     definition so the two never classify a file differently.
     """
     report: list[dict] = []
 
     tools_dir = repo / "tools" / "ground_truth"
-    for name in TOOLS_FILES:
+    for name in _tools_files(facts):
         verb = sync_file(templates_dir / name, tools_dir / name, write=False)
         report.append({"path": f"tools/ground_truth/{name}", "status": _STATUS_BY_VERB[verb]})
 
@@ -850,11 +921,8 @@ def drift_report(repo: Path, facts: dict, templates_dir: Path) -> list[dict]:
         verb = sync_file(templates_dir / name, hooks_dir / name, write=False)
         report.append({"path": f"{facts['hooks_dir']}/{name}", "status": _STATUS_BY_VERB[verb]})
 
-    py_placeholder = ".venv/bin/python" if facts["venv_python"] else "python3"
-    rule_transform = lambda data, py=py_placeholder: _resolve_rule(data, py)
-    verb = sync_file(templates_dir / RULE_FILE, repo / ".claude" / "rules" / "ground-truth.md",
-                      write=False, transform=rule_transform)
-    report.append({"path": ".claude/rules/ground-truth.md", "status": _STATUS_BY_VERB[verb]})
+    verb, _ = sync_rule(repo, facts, templates_dir, write=False)
+    report.append({"path": ".claude/rules/ground-truth.md", "status": "same" if verb == "SKIP" else _STATUS_BY_VERB[verb]})
 
     report.append(_ci_job_drift(repo, facts))
     report.append(_settings_drift(repo, facts, templates_dir))
@@ -899,8 +967,11 @@ def main(argv: list[str]) -> int:
     templates_dir = run.skill / "templates"
     report: list[tuple[str, str]] = []
 
+    if not facts["project_memory"]:
+        report.append(("SKIP", MEMORY_SKIP))
+
     tools_dir = run.repo / "tools" / "ground_truth"
-    for name in TOOLS_FILES:
+    for name in _tools_files(facts):
         verb = sync_file(templates_dir / name, tools_dir / name, write)
         report.append((verb, f"tools/ground_truth/{name}"))
 
@@ -957,10 +1028,7 @@ def main(argv: list[str]) -> int:
         verb = sync_file(templates_dir / name, hooks_dir / name, write, chmod_x=True)
         report.append((verb, f"{facts['hooks_dir']}/{name}"))
 
-    py_placeholder = ".venv/bin/python" if facts["venv_python"] else "python3"
-    rule_transform = lambda data, py=py_placeholder: _resolve_rule(data, py)
-    verb = sync_file(templates_dir / RULE_FILE, run.repo / ".claude" / "rules" / "ground-truth.md", write, transform=rule_transform)
-    report.append((verb, ".claude/rules/ground-truth.md"))
+    report.append(sync_rule(run.repo, facts, templates_dir, write))
 
     verb, detail = plan_settings(run.repo, facts, templates_dir, write)
     report.append((verb, detail))

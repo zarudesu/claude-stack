@@ -48,11 +48,13 @@ probes. GT_PROBE_BUDGET переопределяет старый бюджет (
 
 ## Stop
 
-stop_hook_active=true предотвращает повторный цикл. Во всех остальных событиях
-сначала gt_context.py hook --event stop, ДО clean-tree/STATUS shortcuts.
+stop_hook_active=true предотвращает повторный цикл. Чистое дерево — сразу 0:
+пустая сессия не блокируется. Иначе сначала gt_context.py hook --event stop
+(если helper установлен), ДО STATUS shortcut.
 Stale: advisory предупреждает, blocking возвращает 2. Missing model/ошибка
 проверяющего — 2. Никакой автоматической записи receipts.
-Это обнаруживает также clean committed дрейф и правки зарегистрированного sibling.
+Clean committed дрейф и правки sibling при чистом дереве видны SessionStart и CI.
+Без модели i9_install helper не ставит — Stop как до появления памяти.
 Затем при грязном дереве с STATUS запускается прежняя проверка claims:
 
 1. verify --mode=sync — согласованность контракта.
@@ -99,7 +101,8 @@ GT_BASE_REF задаётся базой PR/MR или согласованным 
 Memory-check вынесен отдельно намеренно: если проверять свежесть внутри каждого
 поведенческого теста, любая mutation краснела бы от изменённого hash вместо
 нарушения нужного поведения. Missing model/receipts/repo и stale дают nonzero,
-независимо от advisory. Все зарегистрированные repos должны быть checkout в
+независимо от advisory. Шаг ставится только в repo с моделью; без неё CI
+остаётся STATUS-only. Все зарегистрированные repos должны быть checkout в
 воспроизводимых версиях; одиночный шаблон CI не собирает экосистему автоматически.
 Хуки привязаны к git-репозиторию; для негитового зонтика запускать helper явно
 из PM/workflow или из зарегистрированного child repo с workspace pointer.

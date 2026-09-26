@@ -348,6 +348,25 @@ class MemoryChecks(unittest.TestCase):
         self.assertIn("stale=backend,bot", proc.stderr)
         self.assertEqual((self.root / memory.RECEIPTS).read_bytes(), before)
 
+    def test_stop_without_helper_or_on_clean_tree_does_not_block(self):
+        (self.root / memory.MODEL).unlink()
+        bot = self.root / "bot"
+        self.assertEqual(self.hook("ground-truth-sync-check.sh").returncode, 0)
+        (bot / "src/core.py").write_text("VALUE = 5\n")
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        subprocess.run(["git", "-C", str(bot), "checkout", "-q", "--", "."], check=True)
+        dest = bot / "tools/ground_truth"
+        dest.mkdir(parents=True)
+        shutil.copyfile(SKILL / "templates/gt_context.py", dest / "gt_context.py")
+        subprocess.run(["git", "-C", str(bot), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(bot), "-c", "user.name=fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "helper"], check=True)
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        (bot / "src/core.py").write_text("VALUE = 6\n")
+        self.assertEqual(self.hook("ground-truth-sync-check.sh").returncode, 2)
+
     def test_session_start_warns_about_sibling_drift(self):
         self.install_hook_helper()
         self.accept()

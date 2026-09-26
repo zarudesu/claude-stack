@@ -31,6 +31,9 @@ tools (включая gt_context.py), hooks и короткое правило; 
 pre-commit, может менять gitignore и добавлять bridge tests. Это не просто cp.
 Локально изменённый шаблон может быть заменён: сравнить до записи, перенести
 нужную адаптацию, затем проверить. Повторный запуск одинаковых assets идемпотентен.
+Компонент памяти (gt_context.py, шаг CI `gt_context.py check`, правило памяти)
+ставится только при наличии .ground-truth/model.yaml. Без модели — строка
+`SKIP project memory`, STATUS-only правило; существующее правило не трогается.
 
 Для Go bridge: --pkg <directory>; JS: --js-test-dir <directory>; Maven:
 --java-pkg <dotted.package> при необходимости. --ci-file выбирает существующий

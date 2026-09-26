@@ -5,7 +5,10 @@ CI_EXTRA_COMMANDS includes its standalone check. It is deliberately outside
 contract_lib and mutation claim tests. The model/receipts are authored and
 reviewed through references/init.md and references/project-memory.md, not
 fabricated by the installer. This historical STATUS pipeline alone is not
-the full initial acceptance criterion.
+the full initial acceptance criterion. Without a model (gt_context.discover
+finds none) i9_install prints `SKIP project memory`, installs neither the
+helper nor its CI step, keeps an existing rule file and otherwise writes
+templates/ground-truth.rule.status-only.md: the STATUS-only contract.
 
 Staging root: `<STAGE>` — the packaging session's scratch directory for this build.
 It mirrors the skill root: `pipeline/`, `templates/`, `references/`, `selftest/`, `SKILL.md`.

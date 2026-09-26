@@ -94,6 +94,8 @@ list — дешёвая по выводу маршрутизация, не св�
 status/check: exit 0 готовые fingerprints всего реестра; 1 stale/gaps; 2
 ошибка/нет модели. status выдаёт revision; подробности области — context repair.
 Нет модели не равняется «нечего проверять». STATUS не заменяет model.
+i9_install ставит helper, его CI-шаг и правило памяти только в repo, где discover
+находит модель; без неё действует STATUS-only контракт (SKIP project memory).
 
 context включает selected+transitive producers (документы), reverse consumers
 (маршруты с их freshness), co_owned_areas (другие владельцы общих входов), unknowns
@@ -120,6 +122,8 @@ hook --event start: краткий статус, не запускает исс�
 hook --event stop: stale advisory предупреждает; blocking возвращает 2.
 Ошибка checker/нет модели также nonzero. Внешний SessionStart не мешает начать
 работу для ремонта. CI запускает check независимо от enforcement.
+Stop зовёт hook только при грязном дереве и установленном helper; без модели
+helper не ставится, и Stop/CI ведут себя как до появления памяти.
 
 ## Масштаб и стоимость
 
