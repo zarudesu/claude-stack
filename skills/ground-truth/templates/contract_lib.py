@@ -900,6 +900,9 @@ def _resolve_probe_static(root: Path, rel_path: str) -> tuple[bool, str]:
     return False, f"{rel_path}: probe is not executable and has no shebang"
 
 
+_PROBE_TIMEOUT_SECONDS = 60
+
+
 def _run_probe(root: Path, rel_path: str) -> tuple[bool, str, bool]:
     full = _within_root(root, rel_path)
     if full is None:
@@ -913,8 +916,10 @@ def _run_probe(root: Path, rel_path: str) -> tuple[bool, str, bool]:
     else:
         argv = [str(full)] if os.access(full, os.X_OK) else [sys.executable, str(full)]
     try:
-        result = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        result = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False, f"{rel_path}: probe timed out after {_PROBE_TIMEOUT_SECONDS}s", False
+    except OSError as exc:
         return False, f"{rel_path}: failed to execute probe: {exc}", False
     if result.returncode == 77:
         return False, f"{rel_path}: probe skipped (exit 77)", True

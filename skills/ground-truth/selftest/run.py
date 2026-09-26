@@ -2704,6 +2704,48 @@ def i9_portability_scenarios() -> bool:
         and rule.is_file() and "gt_context.py list" in rule.read_text(),
         f"write={out(cp_write)} ci={ci_text}",
     )
+
+    # A job the repo adapted by hand: its remap step has another --base and
+    # tolerates exit 2, so the literal template command is nowhere in the file.
+    adapted_remap = ('    - python3 tools/ground_truth/remap_line_refs.py --check --base "$CITE_BASE" '
+                     'STATUS.yaml || [ $? -eq 2 ]\n')
+    adapted_job = (
+        "status-contract:\n  stage: test\n  script:\n"
+        "    - python3 tools/ground_truth/verify.py --mode=full\n"
+        "    - CITE_BASE=$(git merge-base origin/main HEAD)\n"
+        + adapted_remap
+        + "    - python3 tools/ground_truth/gt_mutation_selfcheck.py --strict\n"
+        "    - python3 tools/ground_truth/gt_session_guard.py --mode ci\n"
+    )
+    gl_origin = "https://gitlab.example.invalid/group/app.git"
+    repo, args = _i9_repo("ci-adapted", {".gitlab-ci.yml": adapted_job}, origin=gl_origin)
+    cp_dry = run([*args, "--dry-run"], SKILL_ROOT)
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    ci_after = (repo / ".gitlab-ci.yml").read_text()
+    drift = i9_install.drift_report(repo, i9_install.gather_facts(repo), TEMPLATES)
+    ci_drift = next((d for d in drift if d["path"] == ".gitlab-ci.yml"), {})
+    part_repo, part_args = _i9_repo("ci-adapted-partial", {
+        ".gitlab-ci.yml": adapted_job.replace(
+            "    - python3 tools/ground_truth/gt_mutation_selfcheck.py --strict\n", ""),
+    }, origin=gl_origin)
+    cp_part = run([*part_args, "--write"], SKILL_ROOT)
+    part_text = (part_repo / ".gitlab-ci.yml").read_text()
+    ok &= record(
+        "93a: an installed CI job whose remap step is adapted (own --base, || [ $? -eq 2 ]) -> "
+        "the plan reports the CI file OK and --write leaves it as is; a job missing only the "
+        "mutation step gets that one step and no second remap or session-guard line",
+        cp_dry.returncode == 0
+        and _plan_line(cp_dry.stdout, ".gitlab-ci.yml").strip().startswith("OK")
+        and ci_after == adapted_job
+        and ci_drift.get("status") == "same"
+        and cp_part.returncode == 0
+        and _plan_line(cp_part.stdout, ".gitlab-ci.yml").strip().startswith("UPDATE")
+        and part_text.count("remap_line_refs.py") == 1
+        and part_text.count("gt_session_guard.py") == 1
+        and part_text.count("gt_mutation_selfcheck.py --strict") == 1
+        and adapted_remap in part_text,
+        f"dry={cp_dry.stdout} write={out(cp_write)} drift={ci_drift} part={out(cp_part)} ci={part_text}",
+    )
     return ok
 
 

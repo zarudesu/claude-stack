@@ -579,7 +579,11 @@ def _ci_template(text: str, facts: dict) -> str:
 
 
 def _ci_missing_commands(text: str, commands: list[tuple[str, str]] = CI_EXTRA_COMMANDS) -> list[tuple[str, str]]:
-    return [(comment, cmd) for comment, cmd in commands if cmd not in text]
+    """A command counts as present when its script name is in the CI text:
+    repos adapt these lines (another --base, a tolerated exit code), and
+    matching the whole string would append a second copy next to theirs."""
+    return [(comment, cmd) for comment, cmd in commands
+            if Path(cmd.split()[0]).name not in text]
 
 
 def _ci_add_commands(text: str, commands: list[tuple[str, str]] = CI_EXTRA_COMMANDS) -> str | None:
