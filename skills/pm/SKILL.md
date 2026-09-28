@@ -190,7 +190,7 @@ Rollback завязан на **матрицу потребителей**, не �
 | dependency-manager (аудит зависимостей, CVE, lockfile) | opus (Opus 5.5), effort low |
 | Explore / lookup / проектный doc-агент (механика: поиск, чтение, запуск команд) | haiku |
 | Boilerplate по точному брифу | or-task.sh qwen |
-| Фоллбек при горящем недельном лимите | sonnet |
+| Фоллбек при горящем недельном лимите | sonnet (Sonnet 5.5) |
 
 Сначала снижай effort, потом меняй модель; sonnet — только фоллбек.
 
