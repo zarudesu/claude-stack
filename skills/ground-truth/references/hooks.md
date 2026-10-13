@@ -18,7 +18,7 @@ bridge-тест, CI и gitignore. Проверить diff до применен�
 SessionStart 60, PreToolUse 30 секунд; это предел хоста, не ожидаемая стоимость.
 
 Интерпретатор: GT_PYTHON, иначе абсолютный путь, закреплённый установщиком в
-<git common dir>/ground-truth-python, иначе .venv/bin/python, иначе python3 из
+<git dir>/ground-truth-python (свой у каждого worktree), иначе .venv/bin/python, иначе python3 из
 PATH (doctor считает последнее проблемой). Нужны PyYAML и зависимости
 проверяемых тестов. jq имеет Python fallback.
 

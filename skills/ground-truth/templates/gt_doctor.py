@@ -34,9 +34,9 @@ def interpreter() -> tuple[str, str]:
     """(python, where it came from), in the order the hook scripts use."""
     if os.environ.get("GT_PYTHON"):
         return os.environ["GT_PYTHON"], "GT_PYTHON"
-    git_dir = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    git_dir = subprocess.run(["git", "rev-parse", "--git-dir"],
                              cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    pin = Path(git_dir) / PIN
+    pin = ROOT / git_dir / PIN
     if git_dir and pin.is_file() and pin.read_text().strip():
         return pin.read_text().strip(), str(pin)
     if os.access(ROOT / ".venv/bin/python", os.X_OK):
@@ -50,7 +50,11 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     problems = []
 
-    py, source = interpreter()
+    try:
+        py, source = interpreter()
+    except OSError as exc:
+        py, source = "python3", "PATH"
+        problems.append(f"cannot run git: {exc}; the hooks skip a checkout without git on PATH")
     if source == "PATH":
         problems.append(f"hook interpreter is python3 from PATH, not pinned; fix: {FIX}")
     try:

@@ -52,13 +52,16 @@ status_file="$root/STATUS.yaml"
 # .venv, python3 from PATH. Whichever it is must import PyYAML; a broken one
 # is reported below, never skipped.
 py="${GT_PYTHON:-}"
-pin="$(git rev-parse --path-format=absolute --git-common-dir)/ground-truth-python"
+# Per-worktree git dir, made absolute by hand (git <2.31 has no --path-format).
+gd=$(git rev-parse --git-dir)
+case "$gd" in /*) ;; *) gd="$PWD/$gd" ;; esac
+pin="$gd/ground-truth-python"
 [ -z "$py" ] && [ -s "$pin" ] && py=$(cat "$pin")
 [ -z "$py" ] && { [ -x "$root/.venv/bin/python" ] && py="$root/.venv/bin/python" || py="python3"; }
 
 # Memory covers committed changes and sibling repositories too. No model calls or writes.
 memory="$root/tools/ground_truth/gt_context.py"
-[ -f "$memory" ] || [ -f "$root/tools/ground_truth/verify.py" ] || exit 0
+{ [ -f "$memory" ] || { [ -f "$status_file" ] && [ -f "$root/tools/ground_truth/verify.py" ]; }; } || exit 0
 if ! env_err=$("$py" -c 'import yaml' 2>&1); then
   echo "## ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py"
   exit 0

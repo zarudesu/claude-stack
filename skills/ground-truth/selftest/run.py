@@ -2754,6 +2754,7 @@ def i9_portability_scenarios() -> bool:
     repo, args = _i9_repo("doctor", {".github/workflows/ci.yml": I9_GITHUB_WORKFLOW.format(name="ci")})
     cp_write = run([*args, "--write"], SKILL_ROOT)
     pin = repo / ".git" / i9_install.PYTHON_PIN
+    pinned = pin.read_text().strip() if pin.is_file() else ""
     doctor = [str(repo / "tools" / "ground_truth" / "gt_doctor.py"), "--skill", str(SKILL_ROOT)]
     cp_ok = run(doctor, repo)
     cp_broken = run(doctor, repo, env={**os.environ, "GT_PYTHON": str(broken)})
@@ -2767,11 +2768,12 @@ def i9_portability_scenarios() -> bool:
         "with the pip fix, rc 1, nothing pinned",
         cp_write.returncode == 0
         and "hook python" in cp_write.stdout
+        and os.path.isabs(pinned)
         and cp_ok.returncode == 0 and cp_ok.stdout.startswith("ground-truth doctor: ok")
         and cp_broken.returncode == 1 and "cannot import yaml" in cp_broken.stdout
         and cp_bad.returncode == 1 and "-m pip install pyyaml" in _plan_line(cp_bad.stdout, "FAIL")
         and not pin.exists(),
-        f"write={out(cp_write)} ok={out(cp_ok)} broken={out(cp_broken)} bad={out(cp_bad)}",
+        f"write={out(cp_write)} pinned={pinned!r} ok={out(cp_ok)} broken={out(cp_broken)} bad={out(cp_bad)}",
     )
     return ok
 

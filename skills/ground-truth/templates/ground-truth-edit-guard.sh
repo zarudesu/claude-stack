@@ -30,7 +30,7 @@ fi
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 root=$(git rev-parse --show-toplevel)
 guard="$root/tools/ground_truth/gt_edit_guard.py"
-[ -f "$guard" ] || exit 0
+{ [ -f "$guard" ] && [ -f "$root/STATUS.yaml" ]; } || exit 0
 
 # The system python lacks the project's own deps (pyyaml, etc.) -- the
 # guard parses STATUS.yaml on a cache miss and would fail on the import.
@@ -38,12 +38,18 @@ guard="$root/tools/ground_truth/gt_edit_guard.py"
 # .venv, python3 from PATH. Whichever it is must import PyYAML; a broken one
 # is reported below, never skipped.
 py="${GT_PYTHON:-}"
-pin="$(git rev-parse --path-format=absolute --git-common-dir)/ground-truth-python"
+# Per-worktree git dir, made absolute by hand (git <2.31 has no --path-format).
+gd=$(git rev-parse --git-dir)
+case "$gd" in /*) ;; *) gd="$PWD/$gd" ;; esac
+pin="$gd/ground-truth-python"
 [ -z "$py" ] && [ -s "$pin" ] && py=$(cat "$pin")
 [ -z "$py" ] && { [ -x "$root/.venv/bin/python" ] && py="$root/.venv/bin/python" || py="python3"; }
 # Advisory here: the Stop hook blocks on the same broken environment.
+# PreToolUse shows stdout JSON on exit 0, not stderr; the message is escaped
+# for a JSON string by hand (no python to lean on here).
 if ! env_err=$("$py" -c 'import yaml' 2>&1); then
-  echo "ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py" >&2
+  msg="ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py"
+  printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037')"
   exit 0
 fi
 

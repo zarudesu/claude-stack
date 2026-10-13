@@ -1062,11 +1062,12 @@ else
   fail "F3: broken interpreter -> session guard exit 1 naming the doctor (rc=$rc out=$out)"
 fi
 
-# Case F4: SessionStart and edit guard are advisory -> warn, exit 0
+# Case F4: SessionStart and edit guard are advisory -> warn, exit 0; the edit
+# guard warns through a systemMessage on stdout, the only channel PreToolUse shows
 out=$(GT_PYTHON="$BROKEN_PY" run_session_start_hook 2>&1); rc=$?
-out2=$(GT_PYTHON="$BROKEN_PY" run_edit_hook app/pricing.py 2>&1); rc2=$?
+out2=$(GT_PYTHON="$BROKEN_PY" run_edit_hook app/pricing.py 2>/dev/null); rc2=$?
 if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf '%s' "$out" | grep -q "environment broken" \
-   && printf '%s' "$out2" | grep -q "environment broken"; then
+   && printf '%s' "$out2" | jq -e '.systemMessage | test("environment broken")' >/dev/null; then
   pass "F4: broken interpreter -> SessionStart and edit guard warn, exit 0"
 else
   fail "F4: broken interpreter -> SessionStart and edit guard warn, exit 0 (rc=$rc rc2=$rc2 out=$out out2=$out2)"
@@ -1080,6 +1081,34 @@ if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf '%s' "$out" | grep -q "GT_HOOKS_OFF
   pass "F5: GT_HOOKS_OFF=1 -> exit 0 with a visible notice"
 else
   fail "F5: GT_HOOKS_OFF=1 -> exit 0 with a visible notice (rc=$rc rc2=$rc2 out=$out out2=$out2)"
+fi
+
+# Pin cases: no GT_PYTHON, python3 on PATH lacks PyYAML; the hooks read the
+# interpreter the installer pinned in the git dir.
+GOOD_PY=$(command -v python3)
+mkdir -p "$WORKDIR/noyaml-bin"
+printf '#!/bin/sh\nexec "%s" -S "$@"\n' "$GOOD_PY" > "$WORKDIR/noyaml-bin/python3"
+chmod +x "$WORKDIR/noyaml-bin/python3"
+
+# Case F6: pin names a python with PyYAML -> Stop hook green
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_guard_repo
+dirty_repo
+echo "$GOOD_PY" > "$REPO/.git/ground-truth-python"
+out=$(unset GT_PYTHON; PATH="$WORKDIR/noyaml-bin:$PATH" run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q "environment broken"; then
+  pass "F6: valid pin, python3 on PATH without PyYAML -> Stop hook exit 0"
+else
+  fail "F6: valid pin, python3 on PATH without PyYAML -> Stop hook exit 0 (rc=$rc out=$out)"
+fi
+
+# Case F7: pin names a missing interpreter -> Stop hook exit 2 naming the doctor
+echo "$WORKDIR/no-such-python" > "$REPO/.git/ground-truth-python"
+out=$(unset GT_PYTHON; PATH="$WORKDIR/noyaml-bin:$PATH" run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "environment broken: .*no-such-python.*gt_doctor.py"; then
+  pass "F7: pin to a missing interpreter -> Stop hook exit 2 naming the doctor"
+else
+  fail "F7: pin to a missing interpreter -> Stop hook exit 2 naming the doctor (rc=$rc out=$out)"
 fi
 
 echo "----"

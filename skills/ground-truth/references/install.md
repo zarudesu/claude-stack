@@ -27,7 +27,7 @@ python3 <skill>/pipeline/gt.py i9_install --run run.json --write
 ```
 
 Installer закрепляет интерпретатор хуков: .venv/bin/python репозитория, иначе
-run.python; абсолютный путь пишется в <git common dir>/ground-truth-python. Без
+run.python; абсолютный путь пишется в <git dir>/ground-truth-python (свой у каждого worktree). Без
 PyYAML — строка FAIL с командой `<python> -m pip install pyyaml` и rc 1.
 
 Проверка окружения в установленном repo (stdlib, любой python3):

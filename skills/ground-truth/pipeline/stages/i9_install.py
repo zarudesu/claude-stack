@@ -477,7 +477,7 @@ def sync_rule(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tupl
     return sync_file(templates_dir / STATUS_ONLY_RULE_FILE, dst, write, transform=transform), rel
 
 
-# Hooks read this file in the git common dir before .venv or PATH.
+# Hooks read this file in the per-worktree git dir before .venv or PATH.
 PYTHON_PIN = "ground-truth-python"
 
 
@@ -494,9 +494,9 @@ def plan_python(repo: Path, run_python: Path, write: bool) -> tuple[str, str]:
         err = str(exc)
     if err:
         return "FAIL", f"hook interpreter {py} cannot import yaml: {err}; fix: {py} -m pip install pyyaml"
-    git_dir = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    git_dir = subprocess.run(["git", "rev-parse", "--git-dir"],
                              cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
-    pin = Path(git_dir) / PYTHON_PIN
+    pin = repo.resolve() / git_dir / PYTHON_PIN
     data = (py + "\n").encode()
     verb = "CREATE" if not pin.is_file() else ("OK" if pin.read_bytes() == data else "UPDATE")
     if write and verb != "OK":
