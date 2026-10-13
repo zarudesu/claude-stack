@@ -2919,10 +2919,38 @@ def cited_line_scenarios() -> bool:
     return ok
 
 
+def pending_queue_ci_scenario() -> bool:
+    """verify --mode=full fails on a queue over its total limit or with an escalated entry."""
+    ok = True
+    queue = FIXTURE / ".ground-truth" / "pending.yaml"
+    queue.parent.mkdir(exist_ok=True)
+
+    def entry(key: str, first: str) -> dict:
+        return {"key": key, "area": "global", "class": "uncovered", "first_seen": {"date": first, "rev": "-"},
+                "last_seen": {"date": TODAY, "rev": "-", "session": "s"}, "sessions": 1,
+                "evidence": key, "batches_survived": 0, "escalated": False}
+
+    with added_file(FIXTURE / "tools" / "ground_truth" / "gt_pending.py", (TEMPLATES / "gt_pending.py").read_text()):
+        with added_file(queue, json.dumps({"pending": [entry(f"uncovered:m{i}", TODAY) for i in range(31)]})):
+            cp = verify("full")
+            ok &= record("pending: verify --mode=full exits 1 over the total queue limit",
+                         cp.returncode == 1 and "pending queue has 31/30 entries" in out(cp), out(cp))
+        with added_file(queue, json.dumps({"pending": [entry("uncovered:old", "2000-01-01")]})):
+            cp = verify("full")
+            ok &= record("pending: verify --mode=full exits 1 on an escalated entry",
+                         cp.returncode == 1 and "pending uncovered:old escalated: first seen" in out(cp), out(cp))
+        with added_file(queue, json.dumps({"pending": [entry("uncovered:new", TODAY)]})):
+            cp = verify("full")
+            ok &= record("pending: verify --mode=full stays green on a queue within limits", cp.returncode == 0, out(cp))
+    queue.parent.rmdir()
+    return ok
+
+
 def main() -> int:
     build_fixture()
     ok = True
     ok &= happy_path()
+    ok &= pending_queue_ci_scenario()
     ok &= fault_scenarios()
     ok &= banned_words_exclude_scenarios()
     ok &= step4_scenarios()

@@ -18,9 +18,13 @@ import tempfile
 
 import yaml
 
+# No __pycache__ next to the helper: it would show up as drift of its own area.
+sys.dont_write_bytecode = True
+import gt_pending  # noqa: E402
+
 MODEL = ".ground-truth/model.yaml"
 RECEIPTS = ".ground-truth/review.json"
-MANAGED = {MODEL, RECEIPTS, RECEIPTS + ".lock", ".ground-truth/workspace"}
+MANAGED = {MODEL, RECEIPTS, RECEIPTS + ".lock", ".ground-truth/workspace", gt_pending.QUEUE}
 
 
 def digest(value):
@@ -360,6 +364,7 @@ def main(argv=None):
     commands.add_parser("check")
     hook = commands.add_parser("hook")
     hook.add_argument("--event", choices=["start", "stop"], required=True)
+    hook.add_argument("--session", default="unknown")
     context = commands.add_parser("context")
     context.add_argument("--area", action="append", required=True)
     context.add_argument("--max-chars", type=int, default=24000)
@@ -391,6 +396,9 @@ def main(argv=None):
             return 0
         if args.command == "context":
             out = packet(view, args.area, args.max_chars)
+            # Deferred drift of the selected areas, so the executor sees it.
+            out["pending"] = [{k: e[k] for k in ("key", "evidence", "escalated")}
+                              for e in gt_pending.load(root)[2].values() if e["area"] in args.area]
             latest = inspect(root)
             if latest["revision"] != view["revision"]:
                 out.update(fresh=False, packet_complete=False, documents=[],
@@ -399,6 +407,17 @@ def main(argv=None):
             return 0 if out["fresh"] and out["packet_complete"] else 1
         out = summary(view)
         if args.command == "hook":
+            if args.event == "stop":
+                # Stale areas and unclassified files are queued, not blocking;
+                # removed areas and repository errors still are.
+                areas = list(view["nodes"].values())
+                findings = [("stale-area", cid, cid, f"{area['reason']}: {', '.join(area['changed_files'][:3]) or '-'}")
+                            for cid, area in view["areas"].items() if not area["fresh"]]
+                findings += [("unclassified", f"{rid}/{name}", gt_pending.area_of(name, areas),
+                              f"no area owns {name} in {rid}")
+                             for rid, names in view["gaps"].items() for name in names]
+                gt_pending.record(root, findings, gt_pending.MEMORY_CLASSES, args.session)
+                out["ready"] = not view["removed_areas"] and not view["repository_errors"]
             if args.event == "start" or not out["ready"]:
                 print(f"ground-truth memory: ready={out['ready']}; {len(view['areas'])} areas; "
                       f"stale={','.join(out['stale'][:8]) or '-'}; "

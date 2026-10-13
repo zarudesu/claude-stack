@@ -32,6 +32,8 @@ not a prose edit. An input change after review requires a new delta check.
 Before finishing, obtain the fresh task packet, run the applicable tests,
 `{{PY}} tools/ground_truth/gt_context.py check`, and, when STATUS.yaml exists,
 `{{PY}} tools/ground_truth/verify.py --mode=sync`.
+Stop queues maintenance drift in .ground-truth/pending.yaml instead of blocking;
+fix entries of the areas you touch, an overflowing or escalated area blocks Stop.
 Global stale from independent work is an explicit limitation, not evidence that
 your task failed or the whole workspace is ready. Report changed areas, revision,
 checks and unresolved dependencies. Hooks never supply semantic approval.

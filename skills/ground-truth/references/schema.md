@@ -343,3 +343,29 @@ debt:
 | **R3 — контракт как вторая правда** | `STATUS.yaml` описывает поведение своими словами вместо ссылки на код | `status` обязан нести `check`; `live_state` — только `command`, никогда значение (§6); `debt.state: resolved` невалиден без реального перехода claim'а (§10). |
 
 **Правило-сигнал (spec §10, буквально):** если верификатору когда-либо понадобится `try/except`, чтобы толерантно проглотить непроверяемый claim, — это симптом R3, а не повод писать более снисходительный код. Лечится сменой `kind` claim'а (обычно `status`→`live_state`, если факт на самом деле не статичен, или `status`→`out_of_repo`, если код здесь в принципе не может это доказать), никогда добавлением терпимости в `contract_lib.py`.
+
+## 15. `.ground-truth/pending.yaml` — очередь отложенного дрейфа
+
+Не часть STATUS.yaml; пишется хуками (`gt_pending.py`, `gt_context.py hook --event stop`), коммитится. Руками допустимо только `limits:` и `batches_survived` (батч-ревью).
+
+```yaml
+limits:            # необязательно; дефолты в gt_pending.LIMITS
+  total: 30        # CI: больше — FAIL
+  per_area: 5      # Stop: больше в затронутой области — блок
+  max_age_days: 7  # эскалация: first_seen старше
+  max_batches: 2   # эскалация: batches_survived >=
+  max_sessions: 3  # эскалация: sessions >=
+pending:
+- key: uncovered:src/a.py      # <class>:<объект>, ключ дедупа
+  area: src                    # область model.yaml, иначе верхний каталог, иначе global
+  class: uncovered
+  first_seen: {date: '2026-10-01', rev: abc1234}
+  last_seen: {date: '2026-10-03', rev: def5678, session: <id>}
+  sessions: 2                  # +1 не чаще раза за сессию
+  evidence: src/a.py is not covered by any claim
+  batches_survived: 0
+  escalated: false             # пересчитывается при каждом чтении
+  reason: ...                  # только при escalated: true
+```
+
+Классы — §«Очередь отложенного дрейфа» в hooks.md. Лимиты живут в самой очереди, а не в `meta`/model.yaml: репо может иметь только одно из двух, а loader модели отвергает неизвестные поля.

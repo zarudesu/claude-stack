@@ -44,6 +44,7 @@ TOOLS_FILES = [
     "coldstart_budget.py",
     "remap_line_refs.py",
     "gt_doctor.py",
+    "gt_pending.py",
 ]
 EXAMPLE_PROBE = "example_probe.py"
 HOOK_FILES = [

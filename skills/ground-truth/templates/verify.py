@@ -39,6 +39,11 @@ def main(argv: list[str]) -> int:
         print(f"[FAIL] - : {exc}")
         return 3
 
+    # The deferred-drift queue may defer, not grow without bound or age.
+    if args.mode == "full" and (Path(__file__).resolve().parent / "gt_pending.py").is_file():
+        import gt_pending
+        issues += [contract_lib.Issue("fail", "-", p) for p in gt_pending.ci_problems(root)]
+
     fails = [issue for issue in issues if issue.severity == "fail"]
     warns = [issue for issue in issues if issue.severity != "fail"]
 

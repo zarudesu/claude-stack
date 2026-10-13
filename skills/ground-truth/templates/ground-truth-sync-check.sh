@@ -89,14 +89,22 @@ if ! env_err=$("$py" -c 'import yaml' 2>&1); then
   echo "ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py" >&2
   exit 2
 fi
+# Maintenance drift goes to .ground-truth/pending.yaml instead of blocking.
+# The queue itself blocks only an area this tree touches that overflows its
+# limit or holds an escalated entry (gt_pending.py gate).
+pending="$root/tools/ground_truth/gt_pending.py"
+gate_exit() {
+  [ -f "$pending" ] && ! "$py" "$pending" --root "$root" gate && exit 2
+  exit 0
+}
 if [ -f "$memory" ]; then
-  "$py" "$memory" hook --event stop
+  "$py" "$memory" hook --event stop --session "$sid"
   memory_rc=$?
   [ "$memory_rc" -ne 0 ] && exit 2
 fi
-[ -f "$status_file" ] || exit 0
+[ -f "$status_file" ] || gate_exit
 verifier="$root/tools/ground_truth/verify.py"
-[ -f "$verifier" ] || exit 0
+[ -f "$verifier" ] || gate_exit
 
 # Read the current enforcement policy before running checks.
 mode=$("$py" -c "
@@ -110,8 +118,11 @@ except Exception:
 " "$status_file" 2>/dev/null)
 [ -z "$mode" ] && mode=advisory
 
-out=$(cd "$root" && "$py" "$verifier" --mode=sync 2>&1)
+out=$(cd "$root" && "$py" "$verifier" --mode=sync --show-warn 2>&1)
 rc=$?
+# Its WARN lines feed the queue; only FAIL lines are printed below.
+[ -f "$pending" ] && [ $rc -le 1 ] && printf '%s\n' "$out" | "$py" "$pending" --root "$root" record --session "$sid"
+out=$(printf '%s\n' "$out" | grep -v '^\[WARN\]')
 
 # The session guard proves what the verifier cannot see from shape alone:
 # that touched claim checks are green and new/raised claims describe a mutation.
@@ -152,7 +163,7 @@ if [ $rc -eq 0 ] && [ $guard_rc -eq 0 ]; then
     echo "ground-truth: [WARN] line references drifted" >&2
     echo "$remap_out" >&2
   fi
-  exit 0
+  gate_exit
 fi
 
 escalate=""
@@ -175,5 +186,5 @@ else
   [ $rc -ne 0 ] && echo "$out" >&2
   [ $guard_rc -ne 0 ] && echo "$guard_out" >&2
   [ $remap_rc -eq 1 ] && echo "$remap_out" >&2
-  exit 0
+  gate_exit
 fi

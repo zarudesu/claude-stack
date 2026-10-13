@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 SKILL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SKILL / "templates"))
 import gt_context as memory
+import gt_pending
 
 
 class MemoryChecks(unittest.TestCase):
@@ -274,9 +275,12 @@ class MemoryChecks(unittest.TestCase):
         self.model["enforcement"] = "blocking"
         self.write_model()
         self.assertEqual(self.cli("hook", "--event", "start")[0], 0)
-        self.assertEqual(self.cli("hook", "--event", "stop")[0], 2)
+        self.assertEqual(self.cli("hook", "--event", "stop")[0], 0)
+        self.assertFalse((self.root / memory.RECEIPTS).exists())
+        self.assertIn("stale-area:bot", gt_pending.load(self.root)[2])
         self.accept()
         self.assertEqual(self.cli("hook", "--event", "stop")[0], 0)
+        self.assertEqual(gt_pending.load(self.root)[2], {})
 
     def test_context_change_during_packet_output_is_not_green(self):
         self.accept()
@@ -324,10 +328,22 @@ class MemoryChecks(unittest.TestCase):
         (task_tree / "src/core.py").write_text("VALUE = 42\n")
         self.assertFalse(memory.inspect(self.root)["areas"]["bot"]["fresh"])
 
+    def test_context_lists_pending_entries_of_the_area(self):
+        self.accept()
+        with contextlib.redirect_stderr(io.StringIO()):
+            gt_pending.record(self.root, [("stale-area", "bot", "bot", "bot evidence"),
+                                          ("stale-area", "landing", "landing", "landing evidence")],
+                              gt_pending.MEMORY_CLASSES, "s1")
+        rc, text = self.cli("context", "--area", "bot")
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(json.loads(text)["pending"],
+                         [{"key": "stale-area:bot", "evidence": "bot evidence", "escalated": False}])
+
     def install_hook_helper(self):
         dest = self.root / "bot/tools/ground_truth"
         dest.mkdir(parents=True)
         shutil.copyfile(SKILL / "templates/gt_context.py", dest / "gt_context.py")
+        shutil.copyfile(SKILL / "templates/gt_pending.py", dest / "gt_pending.py")
         self.model["areas"][1]["sources"].append("tools")
         self.model["enforcement"] = "blocking"
         self.write_model()
@@ -344,8 +360,8 @@ class MemoryChecks(unittest.TestCase):
         before = (self.root / memory.RECEIPTS).read_bytes()
         (self.root / "backend/src/core.py").write_text("VALUE = 99\n")
         proc = self.hook("ground-truth-sync-check.sh")
-        self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("stale=backend,bot", proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("queued 2: stale-area:backend, stale-area:bot", proc.stderr)
         self.assertEqual((self.root / memory.RECEIPTS).read_bytes(), before)
 
     def test_stop_without_helper_or_on_clean_tree_does_not_block(self):
@@ -359,6 +375,7 @@ class MemoryChecks(unittest.TestCase):
         dest = bot / "tools/ground_truth"
         dest.mkdir(parents=True)
         shutil.copyfile(SKILL / "templates/gt_context.py", dest / "gt_context.py")
+        shutil.copyfile(SKILL / "templates/gt_pending.py", dest / "gt_pending.py")
         subprocess.run(["git", "-C", str(bot), "add", "."], check=True)
         subprocess.run(["git", "-C", str(bot), "-c", "user.name=fixture", "-c",
                         "user.email=fixture@example.invalid", "commit", "-qm", "helper"], check=True)
@@ -404,6 +421,109 @@ class MemoryChecks(unittest.TestCase):
         self.assertTrue(any(i.severity == "fail" for i in contract_lib.check_no_banned_words(repo, {})))
         hook.write_text(clean)
         self.assertFalse(any(i.severity == "fail" for i in contract_lib.check_no_banned_words(repo, {})))
+
+
+class PendingQueueChecks(unittest.TestCase):
+    """Deferred drift queue behind the real Stop/SessionStart hooks, verify faked."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="gt-pending-test-")
+        self.repo = Path(self.temp.name) / "repo"
+        self.warns = Path(self.temp.name) / "warns.txt"
+        tools = self.repo / "tools/ground_truth"
+        tools.mkdir(parents=True)
+        shutil.copyfile(SKILL / "templates/gt_pending.py", tools / "gt_pending.py")
+        (tools / "verify.py").write_text(
+            "import os, sys\n"
+            "if '--show-warn' in sys.argv:\n"
+            "    sys.stdout.write(open(os.environ['GT_FAKE_WARNS']).read())\n")
+        (self.repo / "STATUS.yaml").write_text("meta:\n  enforcement: blocking\nclaims: []\n")
+        for name in ("src/a.py", "docs/a.md"):
+            (self.repo / name).parent.mkdir(exist_ok=True)
+            (self.repo / name).write_text("x\n")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def warn(self, *paths):
+        self.warns.write_text("".join(f"[WARN] - : {p} is not covered by any claim\n" for p in paths))
+
+    def hook(self, name, session="s1", touch="src/a.py"):
+        if touch:
+            (self.repo / touch).write_text(f"{session}\n")
+        return subprocess.run(["bash", str(SKILL / "templates" / name)],
+                              input=json.dumps({"cwd": str(self.repo), "session_id": session}),
+                              text=True, capture_output=True,
+                              env={**os.environ, "GT_PYTHON": sys.executable, "GT_FAKE_WARNS": str(self.warns)})
+
+    def entries(self):
+        return gt_pending.load(self.repo)[2]
+
+    def test_deferred_class_is_queued_not_blocking(self):
+        self.warn("src/a.py")
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("queued 1: uncovered:src/a.py", proc.stderr)
+        self.assertEqual(self.entries()["uncovered:src/a.py"]["area"], "src")
+
+    def test_repeat_counts_sessions_without_new_entry(self):
+        self.warn("src/a.py")
+        self.hook("ground-truth-sync-check.sh", "s1")
+        self.hook("ground-truth-sync-check.sh", "s1")
+        self.assertEqual(self.entries()["uncovered:src/a.py"]["sessions"], 1)
+        self.hook("ground-truth-sync-check.sh", "s2")
+        self.assertEqual(list(self.entries()), ["uncovered:src/a.py"])
+        self.assertEqual(self.entries()["uncovered:src/a.py"]["sessions"], 2)
+
+    def test_gone_problem_removes_entry(self):
+        self.warn("src/a.py")
+        self.hook("ground-truth-sync-check.sh")
+        self.warn()
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertIn("resolved 1: uncovered:src/a.py", proc.stderr)
+        self.assertEqual(self.entries(), {})
+
+    def test_area_overflow_blocks_only_a_touched_area(self):
+        self.warn(*(f"src/m{i}.py" for i in range(6)))
+        self.assertEqual(self.hook("ground-truth-sync-check.sh", touch="docs/a.md").returncode, 0)
+        subprocess.run(["git", "-C", str(self.repo), "checkout", "-q", "--", "docs"], check=True)
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("area src has 6/5 entries", proc.stderr)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
+
+    def test_escalation_by_sessions_and_by_age(self):
+        self.warn("src/a.py")
+        for session in ("s1", "s2"):
+            self.assertEqual(self.hook("ground-truth-sync-check.sh", session).returncode, 0)
+        proc = self.hook("ground-truth-sync-check.sh", "s3")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("seen in 3 sessions", proc.stderr)
+        queue = self.repo / gt_pending.QUEUE
+        data = yaml.safe_load(queue.read_text())
+        data["pending"][0].update(sessions=1, first_seen={"date": "2000-01-01", "rev": "-"})
+        queue.write_text(yaml.safe_dump(data))
+        proc = self.hook("ground-truth-sync-check.sh", "s3")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertRegex(proc.stderr, r"first seen \d+d ago \(> 7d\)")
+
+    def test_ci_fails_over_total_limit(self):
+        self.warn(*(f"m{i}/a.py" for i in range(31)))
+        self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(gt_pending.ci_problems(self.repo),
+                         [f"pending queue has 31/30 entries; run the batch review of {gt_pending.QUEUE}"])
+
+    def test_session_start_line_is_stable(self):
+        self.assertNotIn("ground-truth pending", self.hook("ground-truth-session-start.sh", touch=None).stdout)
+        self.warn("src/a.py", "docs/a.md")
+        self.hook("ground-truth-sync-check.sh")
+        first = self.hook("ground-truth-session-start.sh", touch=None).stdout
+        self.assertTrue(first.startswith("ground-truth pending 2/30, oldest 0d, escalated 0\n"), first)
+        self.assertEqual(self.hook("ground-truth-session-start.sh", touch=None).stdout, first)
 
 
 if __name__ == "__main__":

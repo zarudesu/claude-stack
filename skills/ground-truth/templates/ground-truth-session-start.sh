@@ -64,6 +64,9 @@ if ! env_err=$("$py" -c 'import yaml' 2>&1); then
   exit 0
 fi
 [ -f "$memory" ] && "$py" "$memory" hook --event start
+# One line about deferred drift, only when the queue is not empty.
+pending="$root/tools/ground_truth/gt_pending.py"
+[ -f "$pending" ] && "$py" "$pending" --root "$root" summary
 [ -f "$status_file" ] || exit 0
 [ -f "$root/tools/ground_truth/verify.py" ] || exit 0
 
