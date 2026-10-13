@@ -4,7 +4,7 @@
 Usage: python3 tools/ground_truth/verify.py --mode=sync|full [--root DIR]
 
 Exit 0: no FAIL issues. Exit 1: at least one FAIL issue. Exit 3: STATUS.yaml
-is missing or does not parse.
+is missing or does not parse, or the check itself crashed.
 """
 from __future__ import annotations
 
@@ -39,10 +39,15 @@ def main(argv: list[str]) -> int:
         print(f"[FAIL] - : {exc}")
         return 3
 
-    # The deferred-drift queue may defer, not grow without bound or age.
+    # The deferred-drift queue may defer, not grow without bound or age. Only
+    # entries this run still finds count: a fix committed before Stop leaves its
+    # entry in the file. Memory entries are counted as they are.
     if args.mode == "full" and (Path(__file__).resolve().parent / "gt_pending.py").is_file():
         import gt_pending
-        issues += [contract_lib.Issue("fail", "-", p) for p in gt_pending.ci_problems(root)]
+        lines = [f"[WARN] {issue.claim_id} : {issue.message}" for issue in issues]
+        live = {f"{cls}:{obj}" for cls, obj, _, _ in gt_pending.status_findings(root, lines)}
+        issues += [contract_lib.Issue("fail", "-", p)
+                   for p in gt_pending.ci_problems(root, live, set(gt_pending.STATUS_CLASSES))]
 
     fails = [issue for issue in issues if issue.severity == "fail"]
     warns = [issue for issue in issues if issue.severity != "fail"]
@@ -64,4 +69,8 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as exc:  # noqa: BLE001 -- a crash must not read as "no findings"
+        print(f"[FAIL] - : internal error: {type(exc).__name__}: {exc}")
+        sys.exit(3)

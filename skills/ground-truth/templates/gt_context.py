@@ -20,11 +20,14 @@ import yaml
 
 # No __pycache__ next to the helper: it would show up as drift of its own area.
 sys.dont_write_bytecode = True
-import gt_pending  # noqa: E402
+try:
+    import gt_pending  # noqa: E402
+except ImportError:
+    gt_pending = None  # main() reports it; a missing queue helper is a broken install
 
 MODEL = ".ground-truth/model.yaml"
 RECEIPTS = ".ground-truth/review.json"
-MANAGED = {MODEL, RECEIPTS, RECEIPTS + ".lock", ".ground-truth/workspace", gt_pending.QUEUE}
+MANAGED = {MODEL, RECEIPTS, RECEIPTS + ".lock", ".ground-truth/workspace", ".ground-truth/pending.yaml"}
 
 
 def digest(value):
@@ -260,6 +263,36 @@ def summary(view):
             "repository_errors": view["repository_errors"]}
 
 
+def memory_findings(view):
+    """Queue findings (stale areas, unclassified files) and a predicate for the entries this run
+    could not judge: anything resting on a repository that failed to read is left as it was."""
+    errors = view["repository_errors"]
+    blind = {cid for cid in view["nodes"] if any(view["nodes"][d]["repo"] in errors
+                                                  for d in closure([cid], view["nodes"]))}
+    areas = list(view["nodes"].values())
+    findings = [("stale-area", cid, cid, f"{area['reason']}: {', '.join(area['changed_files'][:3]) or '-'}")
+                for cid, area in view["areas"].items() if not area["fresh"] and cid not in blind]
+    findings += [("unclassified", f"{rid}/{name}", gt_pending.area_of(name, areas),
+                  f"no area owns {name} in {rid}")
+                 for rid, names in view["gaps"].items() for name in names]
+    unread = tuple(f"unclassified:{rid}/" for rid in errors)
+    return findings, lambda key: key.startswith(unread) or key.removeprefix("stale-area:") in blind
+
+
+def foreign_queue(root):
+    """True when the model root is not this checkout's git root (workspace layout): the hooks of
+    the checkout handle only their own queue, so the memory queue is gated and summarised here."""
+    try:
+        return Path(git(Path.cwd(), "rev-parse", "--show-toplevel").strip()).resolve() != root
+    except ValueError:
+        return True
+
+
+def queue_warning(exc):
+    print(f"ground-truth memory: pending.yaml unreadable: {exc}; resolve conflict or delete the file",
+          file=sys.stderr)
+
+
 def packet(view, selected, max_chars):
     nodes = view["nodes"]
     if not selected or set(selected) - set(nodes):
@@ -377,6 +410,10 @@ def main(argv=None):
     review.add_argument("--evidence", required=True)
     review.add_argument("--prune-removed", action="store_true")
     args = parser.parse_args(argv)
+    if gt_pending is None:
+        print("ground-truth memory: gt_pending.py missing; run python3 tools/ground_truth/gt_doctor.py",
+              file=sys.stdout if args.command == "hook" and args.event == "start" else sys.stderr)
+        return 2
     try:
         root = args.root.resolve() if args.root else discover(Path.cwd())
         if root is None:
@@ -397,8 +434,11 @@ def main(argv=None):
         if args.command == "context":
             out = packet(view, args.area, args.max_chars)
             # Deferred drift of the selected areas, so the executor sees it.
-            out["pending"] = [{k: e[k] for k in ("key", "evidence", "escalated")}
-                              for e in gt_pending.load(root)[2].values() if e["area"] in args.area]
+            try:
+                out["pending"] = [{k: e[k] for k in ("key", "evidence", "escalated")}
+                                  for e in gt_pending.load(root, local=True)[2].values() if e["area"] in args.area]
+            except gt_pending.Unreadable as exc:
+                queue_warning(exc)
             latest = inspect(root)
             if latest["revision"] != view["revision"]:
                 out.update(fresh=False, packet_complete=False, documents=[],
@@ -410,13 +450,11 @@ def main(argv=None):
             if args.event == "stop":
                 # Stale areas and unclassified files are queued, not blocking;
                 # removed areas and repository errors still are.
-                areas = list(view["nodes"].values())
-                findings = [("stale-area", cid, cid, f"{area['reason']}: {', '.join(area['changed_files'][:3]) or '-'}")
-                            for cid, area in view["areas"].items() if not area["fresh"]]
-                findings += [("unclassified", f"{rid}/{name}", gt_pending.area_of(name, areas),
-                              f"no area owns {name} in {rid}")
-                             for rid, names in view["gaps"].items() for name in names]
-                gt_pending.record(root, findings, gt_pending.MEMORY_CLASSES, args.session)
+                findings, unjudged = memory_findings(view)
+                try:
+                    gt_pending.record(root, findings, gt_pending.MEMORY_CLASSES, args.session, unjudged)
+                except gt_pending.Unreadable as exc:
+                    queue_warning(exc)
                 out["ready"] = not view["removed_areas"] and not view["repository_errors"]
             if args.event == "start" or not out["ready"]:
                 print(f"ground-truth memory: ready={out['ready']}; {len(view['areas'])} areas; "
@@ -424,6 +462,14 @@ def main(argv=None):
                       f"unclassified={sum(map(len, out['gaps'].values()))}; "
                       "use gt_context.py list then context --area ID. Never auto-refresh receipts.",
                       file=sys.stderr if args.event == "stop" else sys.stdout)
+            if foreign_queue(root):
+                if args.event == "start":
+                    try:
+                        gt_pending.summary(root)
+                    except gt_pending.Unreadable as exc:
+                        queue_warning(exc)
+                elif gt_pending.gate(root, {cid for cid, a in view["areas"].items() if a["changed_files"]}):
+                    return 2
             return 2 if args.event == "stop" and not out["ready"] and view["model"].get("enforcement") == "blocking" else 0
         if args.command == "status" and args.brief:
             print(f"ground-truth memory: {len(view['areas'])} areas, {len(out['stale'])} stale, "
@@ -432,6 +478,11 @@ def main(argv=None):
             if out["stale"]:
                 print("needs review: " + ", ".join(out["stale"][:8]))
         else:
+            if args.command == "check" and not (root / "STATUS.yaml").is_file():
+                # verify.py --mode=full counts a queue next to STATUS.yaml; this one is ours.
+                live = {f"{cls}:{obj}" for cls, obj, _, _ in memory_findings(view)[0]}
+                out["pending"] = gt_pending.ci_problems(root, live, gt_pending.MEMORY_CLASSES)
+                out["ready"] = out["ready"] and not out["pending"]
             print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0 if out["ready"] else 1
     except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError, subprocess.TimeoutExpired) as exc:

@@ -346,26 +346,24 @@ debt:
 
 ## 15. `.ground-truth/pending.yaml` — очередь отложенного дрейфа
 
-Не часть STATUS.yaml; пишется хуками (`gt_pending.py`, `gt_context.py hook --event stop`), коммитится. Руками допустимо только `limits:` и `batches_survived` (батч-ревью).
+Не часть STATUS.yaml; пишется хуками (`gt_pending.py`, `gt_context.py hook --event stop`) атомарно (tmp + rename) и только когда меняется набор записей или их evidence; коммитится (вне git-репо — локальное состояние). Руками допустимо только `limits:` и `batches_survived` (батч-ревью).
 
 ```yaml
-limits:            # необязательно; дефолты в gt_pending.LIMITS
+limits:            # пишется всегда (действующие значения); дефолты в gt_pending.LIMITS
   total: 30        # CI: больше — FAIL
   per_area: 5      # Stop: больше в затронутой области — блок
   max_age_days: 7  # эскалация: first_seen старше
   max_batches: 2   # эскалация: batches_survived >=
-  max_sessions: 3  # эскалация: sessions >=
+  max_sessions: 3  # эскалация только на Stop: локальных сессий >=
 pending:
 - key: uncovered:src/a.py      # <class>:<объект>, ключ дедупа
   area: src                    # область model.yaml, иначе верхний каталог, иначе global
   class: uncovered
   first_seen: {date: '2026-10-01', rev: abc1234}
-  last_seen: {date: '2026-10-03', rev: def5678, session: <id>}
-  sessions: 2                  # +1 не чаще раза за сессию
   evidence: src/a.py is not covered by any claim
   batches_survived: 0
-  escalated: false             # пересчитывается при каждом чтении
-  reason: ...                  # только при escalated: true
 ```
+
+`escalated`/`reason` не хранятся: их пересчитывает каждое чтение. Сессии, видевшие запись, — локально в `<git dir>/ground-truth-pending-sessions.json` (`{key: [session id, ...]}`; вне git-репо — `.ground-truth/` рядом с очередью), поэтому ветки разных сессий сливаются без конфликта очереди, а CI эскалирует только по возрасту и `batches_survived`. Старые поля `last_seen`, `sessions`, `escalated`, `reason` убираются при следующей записи.
 
 Классы — §«Очередь отложенного дрейфа» в hooks.md. Лимиты живут в самой очереди, а не в `meta`/model.yaml: репо может иметь только одно из двух, а loader модели отвергает неизвестные поля.

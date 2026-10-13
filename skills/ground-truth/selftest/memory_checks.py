@@ -392,6 +392,32 @@ class MemoryChecks(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("ready=False", proc.stdout)
 
+    def test_workspace_queue_gates_stop_under_blocking_only(self):
+        self.install_hook_helper()
+        self.accept()
+        (self.root / "backend/src/core.py").write_text("VALUE = 99\n")
+        self.assertEqual(self.hook("ground-truth-sync-check.sh").returncode, 0)
+        queue = self.root / gt_pending.QUEUE
+        data = yaml.safe_load(queue.read_text())
+        data["limits"]["per_area"] = 0
+        queue.write_text(yaml.safe_dump(data, sort_keys=False))
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("area backend has 1/0 entries", proc.stderr)
+        data["limits"]["per_area"] = 5
+        data["pending"][0]["first_seen"]["date"] = "2000-01-01"
+        queue.write_text(yaml.safe_dump(data, sort_keys=False))
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("stale-area:backend escalated: first seen", proc.stderr)
+        self.model["enforcement"] = "advisory"
+        self.write_model()
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ground-truth (advisory): pending queue blocks this area", proc.stderr)
+        proc = self.hook("ground-truth-session-start.sh")
+        self.assertEqual(proc.stdout.count("ground-truth pending 2/30, oldest"), 1, proc.stdout)
+
     def test_installer_and_ci_share_real_memory_helper(self):
         sys.path.insert(0, str(SKILL / "pipeline"))
         from stages import i9_install
@@ -463,6 +489,16 @@ class PendingQueueChecks(unittest.TestCase):
     def entries(self):
         return gt_pending.load(self.repo)[2]
 
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=fixture", "-c",
+                               "user.email=fixture@example.invalid", *args], capture_output=True, text=True)
+
+    def edit_entry(self, key, **fields):
+        queue = self.repo / gt_pending.QUEUE
+        data = yaml.safe_load(queue.read_text())
+        next(e for e in data["pending"] if e["key"] == key).update(fields)
+        queue.write_text(yaml.safe_dump(data, sort_keys=False))
+
     def test_deferred_class_is_queued_not_blocking(self):
         self.warn("src/a.py")
         proc = self.hook("ground-truth-sync-check.sh")
@@ -470,14 +506,101 @@ class PendingQueueChecks(unittest.TestCase):
         self.assertIn("queued 1: uncovered:src/a.py", proc.stderr)
         self.assertEqual(self.entries()["uncovered:src/a.py"]["area"], "src")
 
-    def test_repeat_counts_sessions_without_new_entry(self):
+    def test_repeat_stop_leaves_file_and_counts_sessions_locally(self):
         self.warn("src/a.py")
         self.hook("ground-truth-sync-check.sh", "s1")
+        queue = (self.repo / gt_pending.QUEUE).read_bytes()
+        for session in ("s2", "s1"):
+            self.hook("ground-truth-sync-check.sh", session)
+        self.assertEqual((self.repo / gt_pending.QUEUE).read_bytes(), queue)
+        self.assertEqual(set(self.entries()["uncovered:src/a.py"]),
+                         {"key", "area", "class", "first_seen", "evidence", "batches_survived",
+                          "escalated"})
+        local = json.loads((self.repo / ".git" / gt_pending.SESSIONS).read_text())
+        self.assertEqual(local, {"uncovered:src/a.py": ["s1", "s2"]})
+
+    def test_branches_of_different_sessions_merge_without_conflict(self):
+        self.warn("src/a.py")
         self.hook("ground-truth-sync-check.sh", "s1")
-        self.assertEqual(self.entries()["uncovered:src/a.py"]["sessions"], 1)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "queue")
+        self.git("branch", "other")
+        self.git("checkout", "-qb", "one")
         self.hook("ground-truth-sync-check.sh", "s2")
+        self.git("commit", "-qam", "one")
+        self.git("checkout", "-q", "other")
+        self.hook("ground-truth-sync-check.sh", "s3", touch="docs/a.md")
+        self.git("commit", "-qam", "other")
+        merge = self.git("merge", "-q", "--no-edit", "one")
+        self.assertEqual(merge.returncode, 0, merge.stdout + merge.stderr)
         self.assertEqual(list(self.entries()), ["uncovered:src/a.py"])
-        self.assertEqual(self.entries()["uncovered:src/a.py"]["sessions"], 2)
+
+    def test_crashing_verify_keeps_the_queue(self):
+        self.warn("src/a.py")
+        self.hook("ground-truth-sync-check.sh")
+        tools = self.repo / "tools/ground_truth"
+        shutil.copyfile(SKILL / "templates/verify.py", tools / "verify.py")
+        (tools / "contract_lib.py").write_text(
+            "class ContractError(Exception):\n    pass\n\n\ndef run(root, mode):\n    raise RuntimeError('boom')\n")
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("[FAIL] - : internal error: RuntimeError: boom", proc.stderr)
+        self.assertIn("uncovered:src/a.py", self.entries())
+
+    def test_global_entry_does_not_block(self):
+        self.warn("top.py")
+        self.hook("ground-truth-sync-check.sh", touch="top.py")
+        self.edit_entry("uncovered:top.py", first_seen={"date": "2000-01-01", "rev": "-"})
+        proc = self.hook("ground-truth-sync-check.sh", touch="top.py")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.entries()["uncovered:top.py"]["area"], "global")
+
+    def test_unreadable_queue_blocks_only_under_blocking(self):
+        queue = self.repo / gt_pending.QUEUE
+        queue.parent.mkdir()
+        queue.write_text("<<<<<<< HEAD\npending: []\n=======\npending: [{key: x}]\n>>>>>>> other\n")
+        self.warn("src/a.py")
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertRegex(proc.stderr, r"\Aground-truth: pending.yaml unreadable: .+; "
+                                      r"resolve conflict or delete the file\n\Z")
+        status = self.repo / "STATUS.yaml"
+        status.write_text(status.read_text().replace("blocking", "advisory"))
+        proc = self.hook("ground-truth-sync-check.sh")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ground-truth (advisory): pending.yaml unreadable: ", proc.stderr)
+
+    def test_status_classes_parse_from_real_verify_output(self):
+        repo = Path(self.temp.name) / "parse"
+        tools = repo / "tools/ground_truth"
+        tools.mkdir(parents=True)
+        for name in ("verify.py", "contract_lib.py"):
+            shutil.copyfile(SKILL / "templates" / name, tools / name)
+        (repo / "app dir").mkdir()
+        (repo / "app dir/core.py").write_text("def price():\n    return 1\n")
+        (repo / "app dir/new file.py").write_text("x = 1\n")
+        (repo / "tests").mkdir()
+        (repo / "tests/test_core.py").write_text("def test_price():\n    pass\n")
+        (repo / "STATUS.yaml").write_text(yaml.safe_dump({
+            "schema_version": 1,
+            "meta": {"repo": "parse", "enforcement": "advisory", "last_audited": "2026-10-13",
+                     "coverage": {"roots": ["app dir/"], "runner": "pytest"}},
+            "claims": [{"id": "price", "component": "price", "kind": "status", "status": "implemented",
+                        "path": ["app dir/core.py", "app dir/it's gone.py"], "check_kind": "pytest",
+                        "check": "tests/test_core.py::test_price", "note": "see tests/test_core.py:2 «assert»"}],
+            "debt": [{"id": "price_debt", "ref": "price", "state": "open", "severity": "blocking",
+                      "description": "left open", "opened": "2026-10-01"}]}, allow_unicode=True))
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        proc = subprocess.run([sys.executable, str(tools / "verify.py"), "--mode=sync", "--show-warn"],
+                              cwd=repo, capture_output=True, text=True)
+        found = {(cls, obj, area) for cls, obj, area, _ in gt_pending.status_findings(repo, proc.stdout.splitlines())}
+        self.assertEqual(found, {
+            ("missing-path", "price:app dir/it's gone.py", "app dir"),
+            ("uncovered", "app dir/new file.py", "app dir"),
+            ("cited-line", "price:tests/test_core.py:2", "tests"),
+            ("no-assertions", "price:tests/test_core.py::test_price", "tests"),
+            ("open-debt", "price_debt", "app dir"),
+            ("no-canary", "app dir/", "app dir")}, proc.stdout)
 
     def test_gone_problem_removes_entry(self):
         self.warn("src/a.py")
@@ -503,19 +626,27 @@ class PendingQueueChecks(unittest.TestCase):
         proc = self.hook("ground-truth-sync-check.sh", "s3")
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("seen in 3 sessions", proc.stderr)
-        queue = self.repo / gt_pending.QUEUE
-        data = yaml.safe_load(queue.read_text())
-        data["pending"][0].update(sessions=1, first_seen={"date": "2000-01-01", "rev": "-"})
-        queue.write_text(yaml.safe_dump(data))
+        # Sessions are local: CI never escalates on them.
+        self.assertEqual(gt_pending.ci_problems(self.repo, set(self.entries()), set(gt_pending.STATUS_CLASSES)), [])
+        (self.repo / ".git" / gt_pending.SESSIONS).unlink()
+        self.edit_entry("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
         proc = self.hook("ground-truth-sync-check.sh", "s3")
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertRegex(proc.stderr, r"first seen \d+d ago \(> 7d\)")
+        (self.repo / ".git" / gt_pending.SESSIONS).unlink()
+        self.edit_entry("uncovered:src/a.py", first_seen={"date": gt_pending.date.today().isoformat(), "rev": "-"},
+                        batches_survived=2)
+        proc = self.hook("ground-truth-sync-check.sh", "s3")
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("survived 2 batch reviews (>= 2)", proc.stderr)
 
-    def test_ci_fails_over_total_limit(self):
+    def test_ci_counts_only_entries_still_found(self):
         self.warn(*(f"m{i}/a.py" for i in range(31)))
         self.hook("ground-truth-sync-check.sh")
-        self.assertEqual(gt_pending.ci_problems(self.repo),
+        classes = set(gt_pending.STATUS_CLASSES)
+        self.assertEqual(gt_pending.ci_problems(self.repo, set(self.entries()), classes),
                          [f"pending queue has 31/30 entries; run the batch review of {gt_pending.QUEUE}"])
+        self.assertEqual(gt_pending.ci_problems(self.repo, {"uncovered:m0/a.py"}, classes), [])
 
     def test_session_start_line_is_stable(self):
         self.assertNotIn("ground-truth pending", self.hook("ground-truth-session-start.sh", touch=None).stdout)
