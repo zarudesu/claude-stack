@@ -67,7 +67,7 @@ def main():
             continue
         changed.append(p)
     work = [p for p in changed if not matches(p, homes)]
-    filled = [p for p in changed if matches(p, homes)]
+    filled = [p for p in changed if matches(p, homes)] + scan_homes(root, homes, since)
     if not work or filled:
         return 0
     os.makedirs(mark_dir, exist_ok=True)
@@ -79,6 +79,28 @@ def main():
               "если это чужие окна или правки план не требуют — просто заверши ход. Второй раз не спрошу.")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": reason}}, ensure_ascii=False))
     return 0
+
+
+def scan_homes(root, homes, since):
+    # дома ищутся на диске: gitignored pm-каталог в git status не виден
+    found = []
+    for pat in homes:
+        parts = pat.split("/")
+        top = "/".join(parts[:next((i for i, s in enumerate(parts) if any(c in s for c in "*?[")), len(parts))])
+        base = os.path.join(root, top)
+        if not top or not os.path.isdir(base) or os.path.islink(base):
+            continue
+        for d, dirs, files in os.walk(base):
+            dirs[:] = [x for x in dirs if x != ".git" and not os.path.islink(os.path.join(d, x))]
+            for f in files:
+                full = os.path.join(d, f)
+                rel = os.path.relpath(full, root).replace(os.sep, "/")
+                try:
+                    if matches(rel, homes) and not matches(rel, SKIP) and os.path.getmtime(full) >= since:
+                        found.append(rel)
+                except OSError:
+                    continue
+    return found
 
 
 def load_stdin():

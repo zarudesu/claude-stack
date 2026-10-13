@@ -5,6 +5,8 @@ description: Spaceship.com domain registrar API — manage domains, autorenew, c
 
 # Spaceship.com — Управление доменами
 
+Чтение (список, информация, DNS GET) — свободно. Изменения (PUT/DELETE: autorenew, DNS-записи, покупка) — только по прямой просьбе пользователя в этом разговоре, с показом команды до запуска.
+
 ## Аутентификация
 
 ```bash

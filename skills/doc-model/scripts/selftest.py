@@ -4,6 +4,7 @@ import json, os, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LINT = os.path.join(HERE, "doclint.py")
+WB = os.path.join(HERE, "writeback-check.py")
 DUP = "Это нормативное правило длиннее шестидесяти символов, которое повторяется в двух файлах подряд."
 
 
@@ -22,6 +23,26 @@ def expect(out, needle, present=True):
     ok = (needle in out) == present
     print(("ok  " if ok else "FAIL") + f"  {'есть' if present else 'нет'}: {needle}")
     return ok
+
+
+def writeback(pm_after):
+    """pm-каталог в .gitignore: дом заполнения ищется по mtime на диске, а не в git status."""
+    root = tempfile.mkdtemp(prefix="wb-fx-")
+    g = ["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(g[:3] + ["init", "-q"], check=True)
+    w(root, ".gitignore", ".claude/pm/\n"); w(root, "a.txt", "a\n")
+    subprocess.run(g + ["add", "-A"], check=True); subprocess.run(g + ["commit", "-qm", "init"], check=True)
+    gitdir = subprocess.run(g[:3] + ["rev-parse", "--absolute-git-dir"], capture_output=True, text=True).stdout.strip()
+    w(gitdir, "doc-model/session-t.start", "")
+    t = os.path.getmtime(os.path.join(gitdir, "doc-model/session-t.start"))
+    w(root, "a.txt", "a изменён\n"); os.utime(os.path.join(root, "a.txt"), (t + 10, t + 10))
+    w(root, ".claude/pm/x/plan.md", "план\n")
+    tp = t + 10 if pm_after else t - 10
+    os.utime(os.path.join(root, ".claude/pm/x/plan.md"), (tp, tp))
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=root); env.pop("DOC_MODEL_NO_WRITEBACK", None)
+    r = subprocess.run([sys.executable, WB], input=json.dumps({"session_id": "t", "stop_hook_active": False}),
+                       capture_output=True, text=True, env=env)
+    return r.stdout + r.stderr
 
 
 def main():
@@ -130,6 +151,11 @@ def main():
     results.append(expect(str("hashes" in data), "True"))
     # C: bless документа sources=external печатает срок review_after, а не "входов зафиксировано"
     results.append(expect(out, "внешняя природа, срок review_after 7 дн"))
+
+    # write-back: дом в gitignored-каталоге обновлён после маркера — тишина; до маркера — подсказка
+    print("--- write-back ---")
+    results.append(expect(writeback(True), "write-back", False))
+    results.append(expect(writeback(False), "ни один дом заполнения не обновлён"))
 
     print(f"\nитог: {sum(results)}/{len(results)} проверок прошли; фикстура {root}")
     return 0 if all(results) else 1

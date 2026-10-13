@@ -28,7 +28,7 @@ else
     if ! printf '%s' "$RESP" | grep -q '"code":0'; then
       fail "Milvus REST не отвечает на запросы (healthz жив, а запросы нет): ${RESP:0:120}"
     elif ! printf '%s' "$RESP" | grep -q 'hybrid_code_chunks'; then
-      fail "Milvus пуст — коллекции claude-context пропали (реиндекс: scripts/reindex-claude-context.py)"
+      fail "Milvus пуст — коллекции claude-context пропали (реиндекс: scripts/disabled/reindex-claude-context.py)"
     else
       N=$(printf '%s' "$RESP" | grep -o 'hybrid_code_chunks' | wc -l | tr -d ' ')
       ok "Milvus отвечает, коллекций: $N"

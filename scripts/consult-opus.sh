@@ -16,7 +16,8 @@ QUESTION="${1:?usage: consult-opus.sh \"вопрос\" [files...]}"
 shift || true
 
 CTX=""
-if [ ! -t 0 ]; then CTX="$(cat || true)"; fi
+# stdin читаем, только если в нём уже есть данные: у субагента stdin — открытый пустой pipe, и `cat` ждал бы EOF вечно
+if [ ! -t 0 ] && [ -s /dev/stdin ]; then CTX="$(cat || true)"; fi
 for f in "$@"; do
   [ -f "$f" ] || { echo "consult-opus: файл не найден: $f" >&2; exit 1; }
   CTX="${CTX}
