@@ -346,7 +346,7 @@ debt:
 
 ## 15. `.ground-truth/pending.yaml` — очередь отложенного дрейфа
 
-Не часть STATUS.yaml; пишется хуками (`gt_pending.py`, `gt_context.py hook --event stop`) атомарно (tmp + rename) и только когда меняется набор записей или их evidence; коммитится (вне git-репо — локальное состояние). Руками допустимо только `limits:` и `batches_survived` (батч-ревью).
+Не часть STATUS.yaml; пишется хуками (`gt_pending.py`, `gt_context.py hook --event stop`) атомарно (tmp + rename) и только когда меняется набор записей или их evidence; коммитится (вне git-репо — локальное состояние). Вердикты батч-разбора применяет `gt_pending.py batch` (`kept`, `batches_survived`, снятие записей; процедура — [batch-review.md](batch-review.md)). Руками — только `limits:` и `classes:`.
 
 ```yaml
 limits:            # пишется всегда (действующие значения); дефолты в gt_pending.LIMITS
@@ -355,14 +355,22 @@ limits:            # пишется всегда (действующие зна�
   max_age_days: 7  # эскалация: first_seen старше
   max_batches: 2   # эскалация: batches_survived >=
   max_sessions: 3  # эскалация только на Stop: локальных сессий >=
+classes:           # необязательно; ставит владелец по рекомендации report, сам скрипт не меняет
+  no-canary: ignore  # record не ставит находки класса в очередь (уже стоящие снимаются)
+  stale-area: block  # Stop: любая запись класса в тронутой области — блок (только blocking)
 pending:
 - key: uncovered:src/a.py      # <class>:<объект>, ключ дедупа
   area: src                    # область model.yaml, иначе верхний каталог, иначе global
   class: uncovered
   first_seen: {date: '2026-10-01', rev: abc1234}
   evidence: src/a.py is not covered by any claim
-  batches_survived: 0
+  batches_survived: 0          # батч-разборов, пережитых без вердикта; Keep обнуляет
+  kept: {date: '2026-10-05', evidence: refactor lands next week}  # только после Keep
 ```
+
+`kept` — долг признан осознанно: эскалация по возрасту считается от `kept.date`, а не от `first_seen`; запись по-прежнему в счёт `total`/`per_area`.
+
+`.ground-truth/pending-log.yaml` — лог батч-разборов, коммитится, `batch` только дописывает один блок за прогон: `date`, `rev`, `keys` (очередь после прогона), `flow: {in, out}` (приток/отток против `keys` прошлого блока), `verdicts: {Keep: n, ...}`, `closed: {class: n}`, `noise: {class: n}` (Delete с `noise: true`), `escalated: {class: n}` (пришли на прогон эскалированными), `carried` (без вердикта), `age: {median, max}` (дни с `first_seen`, медиана — нижняя), `auto_repaired` (пока 0). Пример и метрики `report` — batch-review.md.
 
 `escalated`/`reason` не хранятся: их пересчитывает каждое чтение. Сессии, видевшие запись, — локально в `<git dir>/ground-truth-pending-sessions.json` (`{key: [session id, ...]}`; вне git-репо — `.ground-truth/` рядом с очередью), поэтому ветки разных сессий сливаются без конфликта очереди, а CI эскалирует только по возрасту и `batches_survived`. Старые поля `last_seen`, `sessions`, `escalated`, `reason` убираются при следующей записи.
 

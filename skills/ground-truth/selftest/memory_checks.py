@@ -657,5 +657,172 @@ class PendingQueueChecks(unittest.TestCase):
         self.assertEqual(self.hook("ground-truth-session-start.sh", touch=None).stdout, first)
 
 
+class BatchReviewChecks(unittest.TestCase):
+    """Batch review of the queue: verdicts, run log, report, class header, due line."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="gt-batch-test-")
+        self.repo = Path(self.temp.name)
+        (self.repo / "STATUS.yaml").write_text("meta:\n  enforcement: blocking\nclaims:\n- id: price_v2\n")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        self.queue = self.repo / gt_pending.QUEUE
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def seed(self, *keys):
+        """Queue `class:path` keys as a Stop would; the queue keeps only these STATUS-class keys."""
+        gt_pending.record(self.repo, [(k.split(":")[0], k.split(":", 1)[1], "src", f"ev {k}") for k in keys],
+                          set(gt_pending.STATUS_CLASSES), "s1")
+
+    def batch(self, verdicts):
+        path = self.repo / "verdicts.yaml"
+        path.write_text(yaml.safe_dump(verdicts))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = gt_pending.main(["--root", str(self.repo), "batch", "--verdicts", str(path)])
+        return rc, err.getvalue()
+
+    def out(self, *argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            gt_pending.main(["--root", str(self.repo), *argv])
+        return buf.getvalue()
+
+    def log(self):
+        return yaml.safe_load((self.repo / gt_pending.LOG).read_text())
+
+    def edit(self, key=None, **fields):
+        data = yaml.safe_load(self.queue.read_text())
+        (next(e for e in data["pending"] if e["key"] == key) if key else data).update(fields)
+        self.queue.write_text(yaml.safe_dump(data, sort_keys=False))
+
+    def test_each_verdict(self):
+        self.seed(*(f"uncovered:src/{n}.py" for n in "abcdef"))
+        rc, err = self.batch([
+            {"key": "uncovered:src/a.py", "verdict": "Update", "evidence": "claim price covers it"},
+            {"key": "uncovered:src/b.py", "verdict": "Replace", "evidence": "now STATUS.yaml#price_v2"},
+            {"key": "uncovered:src/c.py", "verdict": "Consolidate", "into": "uncovered:src/f.py", "evidence": "same file"},
+            {"key": "uncovered:src/d.py", "verdict": "Delete", "noise": True, "evidence": "generated file"},
+            {"key": "uncovered:src/e.py", "verdict": "Keep", "evidence": "refactor lands next week"}])
+        self.assertEqual(rc, 0, err)
+        entries = gt_pending.load(self.repo)[2]
+        self.assertEqual(sorted(entries), ["uncovered:src/e.py", "uncovered:src/f.py"])
+        self.assertEqual(entries["uncovered:src/e.py"]["kept"],
+                         {"date": gt_pending.date.today().isoformat(), "evidence": "refactor lands next week"})
+        self.assertEqual(entries["uncovered:src/e.py"]["batches_survived"], 0)
+        self.assertEqual(entries["uncovered:src/f.py"]["batches_survived"], 1)
+        [block] = self.log()
+        self.assertEqual(block["verdicts"], {"Keep": 1, "Update": 1, "Consolidate": 1, "Replace": 1, "Delete": 1})
+        self.assertEqual((block["keys"], block["flow"], block["closed"], block["noise"], block["carried"],
+                          block["age"], block["auto_repaired"]),
+                         (sorted(entries), {"in": 6, "out": 4}, {"uncovered": 4}, {"uncovered": 1}, 1,
+                          {"median": 0, "max": 0}, 0))
+        # A kept entry still counts against the limits.
+        self.assertIn("2/30 entries", self.out("report"))
+
+    def test_bad_verdict_file_leaves_queue_and_log(self):
+        self.seed("uncovered:src/a.py", "uncovered:src/b.py")
+        before = self.queue.read_bytes()
+        good = {"key": "uncovered:src/b.py", "verdict": "Update", "evidence": "fixed"}
+        for bad, message in (({"key": "uncovered:src/a.py", "verdict": "Keep"}, "evidence is empty"),
+                             ({"key": "uncovered:src/a.py", "verdict": "Keep", "evidence": " TODO "}, "placeholder"),
+                             ({"key": "uncovered:src/zz.py", "verdict": "Delete", "evidence": "x y"}, "not in the queue"),
+                             (good, "given twice"),
+                             ({"key": "uncovered:src/a.py", "verdict": "Fix", "evidence": "x y"}, "verdict must be one of"),
+                             ({"key": "uncovered:src/a.py", "verdict": "Consolidate", "evidence": "dup"}, "needs into"),
+                             ({"key": "uncovered:src/a.py", "verdict": "Replace", "evidence": "STATUS.yaml#gone"},
+                              "existing claim"),
+                             ({"key": "uncovered:src/a.py", "verdict": "Keep", "noise": True, "evidence": "x y"},
+                              "only for Delete")):
+            rc, err = self.batch([good, bad])
+            self.assertEqual(rc, 1, bad)
+            self.assertIn(message, err)
+            self.assertEqual(self.queue.read_bytes(), before)
+            self.assertFalse((self.repo / gt_pending.LOG).exists())
+
+    def test_entries_without_verdict_escalate_after_two_batches(self):
+        self.seed("uncovered:src/a.py")
+        classes = set(gt_pending.STATUS_CLASSES)
+        self.assertEqual(self.batch([])[0], 0)
+        self.assertEqual(gt_pending.ci_problems(self.repo, {"uncovered:src/a.py"}, classes), [])
+        self.assertEqual(self.batch([])[0], 0)
+        self.assertEqual(gt_pending.ci_problems(self.repo, {"uncovered:src/a.py"}, classes),
+                         ["pending uncovered:src/a.py escalated: survived 2 batch reviews (>= 2)"])
+
+    def test_kept_entry_escalates_from_kept_date(self):
+        self.seed("uncovered:src/a.py")
+        self.edit("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
+        self.assertTrue(gt_pending.load(self.repo)[2]["uncovered:src/a.py"]["escalated"])
+        self.assertEqual(self.batch([{"key": "uncovered:src/a.py", "verdict": "Keep", "evidence": "owner accepts"}])[0], 0)
+        self.assertFalse(gt_pending.load(self.repo)[2]["uncovered:src/a.py"]["escalated"])
+        self.edit("uncovered:src/a.py", kept={"date": "2000-01-02", "evidence": "owner accepts"})
+        self.assertRegex(gt_pending.load(self.repo)[2]["uncovered:src/a.py"]["reason"], r"^kept \d+d ago \(> 7d\)$")
+
+    def test_flow_between_runs_and_alarm(self):
+        self.seed("uncovered:src/a.py", "uncovered:src/b.py")
+        self.batch([])
+        self.assertEqual(self.log()[-1]["flow"], {"in": 2, "out": 0})
+        self.assertIn("Alarms:\n  none\n", self.out("report"))
+        self.seed("uncovered:src/a.py", "uncovered:src/b.py", "uncovered:src/c.py", "uncovered:src/d.py")
+        self.batch([{"key": "uncovered:src/a.py", "verdict": "Delete", "evidence": "file removed"}])
+        self.assertEqual(self.log()[-1]["flow"], {"in": 2, "out": 1})
+        self.assertIn("outflow below inflow in the last 2 batch reviews", self.out("report"))
+        self.seed("uncovered:src/c.py", "uncovered:src/d.py")  # b fixed between runs
+        self.batch([{"key": "uncovered:src/c.py", "verdict": "Update", "evidence": "claim added"}])
+        self.assertEqual(self.log()[-1]["flow"], {"in": 0, "out": 2})
+        self.assertEqual(len(self.log()), 3)
+        self.assertIn("Alarms:\n  none\n", self.out("report"))
+
+    def test_report_recommends_demote_and_promote(self):
+        self.seed("uncovered:src/a.py", "uncovered:src/b.py", "uncovered:src/c.py", "missing-path:src/x.py")
+        self.edit("missing-path:src/x.py", first_seen={"date": "2000-01-01", "rev": "-"})
+        self.batch([{"key": f"uncovered:src/{n}.py", "verdict": "Delete", "noise": n != "c", "evidence": "check misfires"}
+                    for n in "abc"])
+        md = self.out("report", "--format", "md")
+        self.assertIn("## Class recommendations\n\n", md)
+        self.assertIn("- demote uncovered: 2/3 closed as noise in the last 1 reviews (classes: {uncovered: ignore})", md)
+        self.assertIn("- promote missing-path: 1 escalations in the last 1 reviews (classes: {missing-path: block})", md)
+        self.assertIn("Delete as noise 2/3", md)
+
+    def test_ignore_class_is_not_queued_and_header_survives(self):
+        self.seed("uncovered:src/a.py")
+        self.edit(classes={"uncovered": "ignore"})
+        self.seed("uncovered:src/a.py", "missing-path:src/x.py")
+        self.assertEqual(sorted(gt_pending.load(self.repo)[2]), ["missing-path:src/x.py"])
+        self.assertEqual(yaml.safe_load(self.queue.read_text())["classes"], {"uncovered": "ignore"})
+
+    def test_block_class_blocks_only_under_blocking(self):
+        self.seed("uncovered:src/a.py")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(gt_pending.gate(self.repo, {"src"}), 0)
+        self.edit(classes={"uncovered": "block"})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(gt_pending.gate(self.repo, {"src"}), 1)
+            self.assertEqual(gt_pending.gate(self.repo, {"docs"}), 0)
+        self.assertIn("uncovered:src/a.py: class uncovered blocks", err.getvalue())
+        (self.repo / "STATUS.yaml").write_text("meta:\n  enforcement: advisory\nclaims: []\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(gt_pending.gate(self.repo, {"src"}), 0)
+        self.assertIn("ground-truth (advisory): pending queue blocks this area", err.getvalue())
+
+    def test_batch_due_on_fill_log_age_and_escalation(self):
+        self.seed("uncovered:src/a.py")
+        self.assertEqual(self.out("summary"), "ground-truth pending 1/30, oldest 0d, escalated 0\n")
+        self.edit(limits={**gt_pending.LIMITS, "total": 1})
+        self.assertIn("; batch review due: queue at 1/1\n", self.out("summary"))
+        self.edit(limits=gt_pending.LIMITS)
+        self.batch([])
+        self.assertNotIn("due", self.out("summary"))
+        log = self.repo / gt_pending.LOG
+        log.write_text(log.read_text().replace(gt_pending.date.today().isoformat(), "2000-01-01"))
+        self.assertRegex(self.out("summary"), r"; batch review due: no batch review for \d+d\n")
+        log.unlink()
+        self.edit("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
+        self.assertRegex(self.out("summary"), r"; batch review due: no batch review for \d+d, 1 escalated\n")
+
+
 if __name__ == "__main__":
     unittest.main()
