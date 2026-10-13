@@ -8,6 +8,13 @@
 # regardless of how the file was changed.
 set -u
 
+# Emergency switch: GT_HOOKS_OFF=1 turns every ground-truth hook off, and
+# says so on each run instead of going quiet.
+if [ "${GT_HOOKS_OFF:-0}" = "1" ]; then
+  echo '{"systemMessage":"ground-truth hooks are off (GT_HOOKS_OFF=1)"}'
+  exit 0
+fi
+
 input=$(cat)
 
 # jq is the normal path for reading the hook JSON; if it is missing from
@@ -60,7 +67,12 @@ status_file="$root/STATUS.yaml"
 
 # The system python lacks the project's own deps (pyyaml, etc.) -- running
 # the verifier under it reports false FAILs on import, not real drift.
+# Order: GT_PYTHON, the absolute path the installer pinned in the git dir,
+# .venv, python3 from PATH. Whichever it is must import PyYAML; a broken one
+# is reported below, never skipped.
 py="${GT_PYTHON:-}"
+pin="$(git rev-parse --path-format=absolute --git-common-dir)/ground-truth-python"
+[ -z "$py" ] && [ -s "$pin" ] && py=$(cat "$pin")
 [ -z "$py" ] && { [ -x "$root/.venv/bin/python" ] && py="$root/.venv/bin/python" || py="python3"; }
 
 # A session that left the tree clean has nothing to hand off: it is never
@@ -70,6 +82,13 @@ git -C "$root" status --porcelain 2>/dev/null | grep -q . || exit 0
 # Memory runs before the STATUS shortcut: a memory-only repo has no STATUS.yaml.
 # No helper installed (no .ground-truth/model.yaml at install time) -> skipped.
 memory="$root/tools/ground_truth/gt_context.py"
+[ -f "$memory" ] || [ -f "$root/tools/ground_truth/verify.py" ] || exit 0
+# A broken interpreter blocks once per stop; stop_hook_active above lets the
+# next stop through, so this can not hold the session.
+if ! env_err=$("$py" -c 'import yaml' 2>&1); then
+  echo "ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py" >&2
+  exit 2
+fi
 if [ -f "$memory" ]; then
   "$py" "$memory" hook --event stop
   memory_rc=$?

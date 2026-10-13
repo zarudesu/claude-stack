@@ -26,6 +26,16 @@ python3 <skill>/pipeline/gt.py i9_install --run run.json --dry-run
 python3 <skill>/pipeline/gt.py i9_install --run run.json --write
 ```
 
+Installer закрепляет интерпретатор хуков: .venv/bin/python репозитория, иначе
+run.python; абсолютный путь пишется в <git common dir>/ground-truth-python. Без
+PyYAML — строка FAIL с командой `<python> -m pip install pyyaml` и rc 1.
+
+Проверка окружения в установленном repo (stdlib, любой python3):
+`python3 tools/ground_truth/gt_doctor.py [--skill <skill>]` — интерпретатор и
+импорт yaml, регистрация хуков в settings и наличие их файлов, CI-джоба
+verify.py; с --skill ещё совпадение hook/tool файлов с templates. Одна строка
+итога, затем по строке на проблему; rc 1 при проблеме.
+
 Применять --write только после оценки конкретного diff/области. Installer копирует
 tools (включая gt_context.py), hooks и короткое правило; мержит settings/CI/
 pre-commit, может менять gitignore и добавлять bridge tests. Это не просто cp.

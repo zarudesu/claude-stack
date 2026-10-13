@@ -2746,6 +2746,33 @@ def i9_portability_scenarios() -> bool:
         and adapted_remap in part_text,
         f"dry={cp_dry.stdout} write={out(cp_write)} drift={ci_drift} part={out(cp_part)} ci={part_text}",
     )
+
+    # An interpreter without PyYAML: -S drops site-packages.
+    broken = SCRATCH_BASE / "broken-python"
+    broken.write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n')
+    broken.chmod(0o755)
+    repo, args = _i9_repo("doctor", {".github/workflows/ci.yml": I9_GITHUB_WORKFLOW.format(name="ci")})
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    pin = repo / ".git" / i9_install.PYTHON_PIN
+    doctor = [str(repo / "tools" / "ground_truth" / "gt_doctor.py"), "--skill", str(SKILL_ROOT)]
+    cp_ok = run(doctor, repo)
+    cp_broken = run(doctor, repo, env={**os.environ, "GT_PYTHON": str(broken)})
+    run_json = Path(args[2])
+    run_json.write_text(run_json.read_text().replace(json.dumps(sys.executable), json.dumps(str(broken))))
+    pin.unlink(missing_ok=True)
+    cp_bad = run([*args, "--write"], SKILL_ROOT)
+    ok &= record(
+        "94: install pins an absolute hook python that imports yaml and doctor is ok (rc 0); "
+        "doctor with a python lacking yaml -> rc 1; install with such a run.python -> FAIL "
+        "with the pip fix, rc 1, nothing pinned",
+        cp_write.returncode == 0
+        and "hook python" in cp_write.stdout
+        and cp_ok.returncode == 0 and cp_ok.stdout.startswith("ground-truth doctor: ok")
+        and cp_broken.returncode == 1 and "cannot import yaml" in cp_broken.stdout
+        and cp_bad.returncode == 1 and "-m pip install pyyaml" in _plan_line(cp_bad.stdout, "FAIL")
+        and not pin.exists(),
+        f"write={out(cp_write)} ok={out(cp_ok)} broken={out(cp_broken)} bad={out(cp_bad)}",
+    )
     return ok
 
 

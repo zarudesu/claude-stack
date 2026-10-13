@@ -19,7 +19,7 @@ defer mutation proof to isolated CI, leaving the user's files alone. Three rules
       points at. This is an advisory heuristic, not proof of coverage.
 
 Exit 0 can include advisory warnings. Exit 1: a check is red or required
-proof is missing. Hook mode reports checker errors and incomplete budgets
+proof is missing, or an import fails (broken environment). Hook mode reports checker errors and incomplete budgets
 as warnings; CI fails closed on either. Defaults: hook 25 checks / 120s,
 CI no count limit / 3600s, evaluated between checks. Individual checks
 also have timeouts. Internal errors are logged in the git directory.
@@ -40,9 +40,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     import contract_lib  # noqa: E402
     from gt_edit_guard import claim_ids_for, is_test_file  # noqa: E402
-except Exception as exc:  # a half-installed tools/ground_truth is not a red check
-    print(f"WARN guard internal error: {exc}", file=sys.stderr)
-    sys.exit(1 if "ci" in sys.argv or "--mode=ci" in sys.argv else 0)
+except Exception as exc:  # a broken environment is never a green check
+    print(f"ground-truth: environment broken: {exc}; run: python3 tools/ground_truth/gt_doctor.py",
+          file=sys.stderr)
+    sys.exit(1)
 
 LOG_NAME = "ground-truth-guard.log"
 

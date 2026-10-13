@@ -1028,6 +1028,60 @@ else
   fail "C3: SessionStart surfaces sync warnings on a green verifier (rc=$rc out=$out)"
 fi
 
+# ---------------------------------------------------------------------
+# Broken environment: an interpreter without PyYAML (-S drops site-packages).
+# Blocking hooks fail closed and name the doctor; advisory ones only warn.
+BROKEN_PY="$WORKDIR/broken-python"
+printf '#!/bin/sh\nexec python3 -S "$@"\n' > "$BROKEN_PY"
+chmod +x "$BROKEN_PY"
+
+# Case F1: Stop hook, even under advisory enforcement -> exit 2 naming the doctor
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_guard_repo
+dirty_repo
+out=$(GT_PYTHON="$BROKEN_PY" run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "environment broken: .*yaml.*gt_doctor.py"; then
+  pass "F1: broken interpreter -> Stop hook exit 2 naming the doctor"
+else
+  fail "F1: broken interpreter -> Stop hook exit 2 naming the doctor (rc=$rc out=$out)"
+fi
+
+# Case F2: the repeated stop (stop_hook_active) is let through -- no loop
+out=$(GT_PYTHON="$BROKEN_PY" run_stop_hook true 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+  pass "F2: broken interpreter, stop_hook_active -> exit 0"
+else
+  fail "F2: broken interpreter, stop_hook_active -> exit 0 (rc=$rc out=$out)"
+fi
+
+# Case F3: session guard alone -> exit 1 (not a green warning)
+out=$("$BROKEN_PY" "$REPO/tools/ground_truth/gt_session_guard.py" --root "$REPO" --mode hook 2>&1); rc=$?
+if [ $rc -eq 1 ] && printf '%s' "$out" | grep -q "environment broken: .*gt_doctor.py"; then
+  pass "F3: broken interpreter -> session guard exit 1 naming the doctor"
+else
+  fail "F3: broken interpreter -> session guard exit 1 naming the doctor (rc=$rc out=$out)"
+fi
+
+# Case F4: SessionStart and edit guard are advisory -> warn, exit 0
+out=$(GT_PYTHON="$BROKEN_PY" run_session_start_hook 2>&1); rc=$?
+out2=$(GT_PYTHON="$BROKEN_PY" run_edit_hook app/pricing.py 2>&1); rc2=$?
+if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf '%s' "$out" | grep -q "environment broken" \
+   && printf '%s' "$out2" | grep -q "environment broken"; then
+  pass "F4: broken interpreter -> SessionStart and edit guard warn, exit 0"
+else
+  fail "F4: broken interpreter -> SessionStart and edit guard warn, exit 0 (rc=$rc rc2=$rc2 out=$out out2=$out2)"
+fi
+
+# Case F5: GT_HOOKS_OFF=1 -> exit 0 and says the hooks are off
+out=$(GT_HOOKS_OFF=1 GT_PYTHON="$BROKEN_PY" run_stop_hook false 2>&1); rc=$?
+out2=$(GT_HOOKS_OFF=1 GT_PYTHON="$BROKEN_PY" run_session_start_hook 2>&1); rc2=$?
+if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf '%s' "$out" | grep -q "GT_HOOKS_OFF=1" \
+   && printf '%s' "$out2" | grep -q "GT_HOOKS_OFF=1"; then
+  pass "F5: GT_HOOKS_OFF=1 -> exit 0 with a visible notice"
+else
+  fail "F5: GT_HOOKS_OFF=1 -> exit 0 with a visible notice (rc=$rc rc2=$rc2 out=$out out2=$out2)"
+fi
+
 echo "----"
 echo "passed: $PASS  failed: $FAIL"
 if [ "$FAIL" -ne 0 ]; then

@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -41,6 +43,7 @@ TOOLS_FILES = [
     "gt_hook_state.py",
     "coldstart_budget.py",
     "remap_line_refs.py",
+    "gt_doctor.py",
 ]
 EXAMPLE_PROBE = "example_probe.py"
 HOOK_FILES = [
@@ -471,6 +474,33 @@ def sync_rule(repo: Path, facts: dict, templates_dir: Path, write: bool) -> tupl
         verb = sync_file(templates_dir / STATUS_ONLY_RULE_FILE, dst, write=False, transform=transform)
         return (verb, rel) if verb == "OK" else ("SKIP", f"{rel} (present, left as is: no project memory)")
     return sync_file(templates_dir / STATUS_ONLY_RULE_FILE, dst, write, transform=transform), rel
+
+
+# Hooks read this file in the git common dir before .venv or PATH.
+PYTHON_PIN = "ground-truth-python"
+
+
+def plan_python(repo: Path, run_python: Path, write: bool) -> tuple[str, str]:
+    """Pin the hook interpreter: the repo's .venv python when present (the
+    verifier then sees the project's deps), else run.python. It must import
+    PyYAML; otherwise FAIL with the fix instead of a hook that skips later."""
+    venv = repo / ".venv" / "bin" / "python"
+    py = os.path.abspath(venv if venv.exists() else shutil.which(str(run_python)) or run_python)
+    try:
+        cp = subprocess.run([py, "-c", "import yaml"], capture_output=True, text=True)
+        err = (cp.stderr.strip().splitlines() or [f"exit {cp.returncode}"])[-1] if cp.returncode else ""
+    except OSError as exc:
+        err = str(exc)
+    if err:
+        return "FAIL", f"hook interpreter {py} cannot import yaml: {err}; fix: {py} -m pip install pyyaml"
+    git_dir = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    pin = Path(git_dir) / PYTHON_PIN
+    data = (py + "\n").encode()
+    verb = "CREATE" if not pin.is_file() else ("OK" if pin.read_bytes() == data else "UPDATE")
+    if write and verb != "OK":
+        pin.write_bytes(data)
+    return verb, f"hook python {py} (pinned in {pin})"
 
 
 # ----------------------------------------------------- settings / CI / pc --
@@ -1033,6 +1063,8 @@ def main(argv: list[str]) -> int:
         report.append((verb, f"{facts['hooks_dir']}/{name}"))
 
     report.append(sync_rule(run.repo, facts, templates_dir, write))
+
+    report.append(plan_python(run.repo, run.python, write))
 
     verb, detail = plan_settings(run.repo, facts, templates_dir, write)
     report.append((verb, detail))

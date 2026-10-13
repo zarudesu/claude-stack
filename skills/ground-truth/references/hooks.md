@@ -17,8 +17,17 @@ bridge-тест, CI и gitignore. Проверить diff до применен�
 Существующий timeout не уменьшается. Новые шаблонные timeout — Stop 600,
 SessionStart 60, PreToolUse 30 секунд; это предел хоста, не ожидаемая стоимость.
 
-Интерпретатор: GT_PYTHON, иначе .venv/bin/python, иначе python3. Нужны PyYAML
-и зависимости проверяемых тестов. jq имеет Python fallback.
+Интерпретатор: GT_PYTHON, иначе абсолютный путь, закреплённый установщиком в
+<git common dir>/ground-truth-python, иначе .venv/bin/python, иначе python3 из
+PATH (doctor считает последнее проблемой). Нужны PyYAML и зависимости
+проверяемых тестов. jq имеет Python fallback.
+
+Сломанное окружение не пропускается молча. Интерпретатор не импортирует yaml →
+Stop exit 2 (при любой enforcement), session guard exit 1; SessionStart и
+edit-guard только предупреждают. Сообщение одно: `ground-truth: environment
+broken: <причина>; run: python3 tools/ground_truth/gt_doctor.py`. Повторный stop
+(stop_hook_active) пропускается, сессия не зацикливается. Аварийный выход —
+GT_HOOKS_OFF=1: все хуки exit 0 и каждый раз печатают, что выключены.
 
 ## SessionStart
 

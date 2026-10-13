@@ -9,6 +9,13 @@
 # warned: the goal is "seen on the very first turn", not "prevented".
 set -u
 
+# Emergency switch: GT_HOOKS_OFF=1 turns every ground-truth hook off, and
+# says so on each run instead of going quiet.
+if [ "${GT_HOOKS_OFF:-0}" = "1" ]; then
+  echo '{"systemMessage":"ground-truth hooks are off (GT_HOOKS_OFF=1)"}'
+  exit 0
+fi
+
 input=$(cat)
 
 # jq is the normal path for reading the hook JSON; if it is missing from
@@ -41,11 +48,21 @@ status_file="$root/STATUS.yaml"
 
 # The system python lacks the project's own deps (pyyaml, etc.) -- running
 # the verifier under it reports false FAILs on import, not real drift.
+# Order: GT_PYTHON, the absolute path the installer pinned in the git dir,
+# .venv, python3 from PATH. Whichever it is must import PyYAML; a broken one
+# is reported below, never skipped.
 py="${GT_PYTHON:-}"
+pin="$(git rev-parse --path-format=absolute --git-common-dir)/ground-truth-python"
+[ -z "$py" ] && [ -s "$pin" ] && py=$(cat "$pin")
 [ -z "$py" ] && { [ -x "$root/.venv/bin/python" ] && py="$root/.venv/bin/python" || py="python3"; }
 
 # Memory covers committed changes and sibling repositories too. No model calls or writes.
 memory="$root/tools/ground_truth/gt_context.py"
+[ -f "$memory" ] || [ -f "$root/tools/ground_truth/verify.py" ] || exit 0
+if ! env_err=$("$py" -c 'import yaml' 2>&1); then
+  echo "## ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py"
+  exit 0
+fi
 [ -f "$memory" ] && "$py" "$memory" hook --event start
 [ -f "$status_file" ] || exit 0
 [ -f "$root/tools/ground_truth/verify.py" ] || exit 0
