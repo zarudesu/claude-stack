@@ -5,7 +5,8 @@ Usage: python3 tools/ground_truth/gt_doctor.py [--skill DIR]
 
 Stdlib only, so it runs under any python3 even when the hook interpreter is
 the broken part. Checks the interpreter the hooks resolve (GT_PYTHON, the
-absolute path the installer pinned in the git dir, .venv/bin/python, python3
+absolute path the installer pinned in the worktree's git dir, then in the
+common git dir, .venv/bin/python, python3
 from PATH -- the last one is reported, the hooks must not depend on PATH
 silently) and that it imports PyYAML; that every hook is registered in the
 project settings and its script exists; that a CI job runs the verifier.
@@ -34,11 +35,12 @@ def interpreter() -> tuple[str, str]:
     """(python, where it came from), in the order the hook scripts use."""
     if os.environ.get("GT_PYTHON"):
         return os.environ["GT_PYTHON"], "GT_PYTHON"
-    git_dir = subprocess.run(["git", "rev-parse", "--git-dir"],
-                             cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    pin = ROOT / git_dir / PIN
-    if git_dir and pin.is_file() and pin.read_text().strip():
-        return pin.read_text().strip(), str(pin)
+    for flag in ("--git-dir", "--git-common-dir"):
+        git_dir = subprocess.run(["git", "rev-parse", flag],
+                                 cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        pin = ROOT / git_dir / PIN
+        if git_dir and pin.is_file() and pin.read_text().strip():
+            return pin.read_text().strip(), str(pin)
     if os.access(ROOT / ".venv/bin/python", os.X_OK):
         return str(ROOT / ".venv/bin/python"), ".venv"
     return "python3", "PATH"

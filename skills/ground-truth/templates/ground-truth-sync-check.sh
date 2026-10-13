@@ -71,11 +71,13 @@ status_file="$root/STATUS.yaml"
 # .venv, python3 from PATH. Whichever it is must import PyYAML; a broken one
 # is reported below, never skipped.
 py="${GT_PYTHON:-}"
-# Per-worktree git dir, made absolute by hand (git <2.31 has no --path-format).
-gd=$(git rev-parse --git-dir)
-case "$gd" in /*) ;; *) gd="$PWD/$gd" ;; esac
-pin="$gd/ground-truth-python"
-[ -z "$py" ] && [ -s "$pin" ] && py=$(cat "$pin")
+# Per-worktree git dir first, then the common one (an install from the main
+# clone pins there for every linked worktree); made absolute by hand (git
+# <2.31 has no --path-format).
+for gd in "$(git rev-parse --git-dir)" "$(git rev-parse --git-common-dir)"; do
+  case "$gd" in /*) ;; *) gd="$PWD/$gd" ;; esac
+  [ -z "$py" ] && [ -s "$gd/ground-truth-python" ] && py=$(cat "$gd/ground-truth-python")
+done
 [ -z "$py" ] && { [ -x "$root/.venv/bin/python" ] && py="$root/.venv/bin/python" || py="python3"; }
 
 # A session that left the tree clean has nothing to hand off: it is never

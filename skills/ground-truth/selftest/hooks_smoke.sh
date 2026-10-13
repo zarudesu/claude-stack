@@ -1111,6 +1111,21 @@ else
   fail "F7: pin to a missing interpreter -> Stop hook exit 2 naming the doctor (rc=$rc out=$out)"
 fi
 
+# Case F8: a linked worktree without its own pin uses the main clone's pin
+# (the common git dir), not python3 from PATH
+setup_guard_repo
+echo "$GOOD_PY" > "$REPO/.git/ground-truth-python"
+(cd "$REPO" && git worktree add -q "$WORKDIR/linked" -b linked)
+echo "# dirty" >> "$WORKDIR/linked/README.md"
+input=$(printf '{"session_id":"x","cwd":"%s","hook_event_name":"Stop","stop_hook_active":false}' "$WORKDIR/linked")
+out=$(unset GT_PYTHON; printf '%s' "$input" | PATH="$WORKDIR/noyaml-bin:$PATH" \
+  bash "$WORKDIR/linked/.claude/hooks/ground-truth-sync-check.sh" 2>&1); rc=$?  # gt-allow: real install path, not prose
+if [ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q "environment broken"; then
+  pass "F8: linked worktree without its own pin, pin in the main clone -> Stop hook exit 0"
+else
+  fail "F8: linked worktree without its own pin, pin in the main clone -> Stop hook exit 0 (rc=$rc out=$out)"
+fi
+
 echo "----"
 echo "passed: $PASS  failed: $FAIL"
 if [ "$FAIL" -ne 0 ]; then
