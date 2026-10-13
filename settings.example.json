@@ -6,6 +6,7 @@
     "commit": "",
     "pr": ""
   },
+  "model": "opus",
   "effortLevel": "high",
   "modelSettings": {
     "claude-opus-5-5": {
@@ -131,7 +132,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/secret-scan-precommit.sh"
+            "command": "$HOME/.claude/hooks/secret-scan-precommit.sh",
+            "onFailure": "block",
+            "timeout": 10
           }
         ]
       },
@@ -140,7 +143,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/protected-paths-guard-bash.sh"
+            "command": "$HOME/.claude/hooks/protected-paths-guard-bash.sh",
+            "onFailure": "block",
+            "timeout": 10
           }
         ]
       },
@@ -149,7 +154,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/protected-paths-guard.sh"
+            "command": "$HOME/.claude/hooks/protected-paths-guard.sh",
+            "onFailure": "block",
+            "timeout": 10
           }
         ]
       }
@@ -189,6 +196,11 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/track-time.sh claude"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/uncommitted-reminder.sh",
+            "timeout": 5
           }
         ]
       }
