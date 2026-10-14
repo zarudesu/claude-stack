@@ -26,18 +26,25 @@
           # dependencies of every one of them, not only of the suite this
           # workflow's own test job runs.
           pip install -r requirements-dev.txt
-      - name: verify status contract
+      # github.event.before is all zeros on the push that creates a branch;
+      # fall back to the merge base with the default branch so verify, remap
+      # and the guard see a real base.
+      - name: resolve base ref
         env:
-          # Example only: pass the same env the project's test job passes.
-          # The unit suite the probe re-runs needs it to import cleanly.
-          # API_TOKEN: "..."
-          # DEBUG: "true"
           GT_BASE_REF: "${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}"
+        run: |
+          echo "GT_BASE_REF=$(git rev-parse --verify --quiet "${GT_BASE_REF}^{commit}" || git merge-base "origin/${{ github.event.repository.default_branch }}" HEAD)" >> "$GITHUB_ENV"
+      - name: verify status contract
+        # Example only: pass the same env the project's test job passes.
+        # The unit suite the probe re-runs needs it to import cleanly.
+        # env:
+        #   API_TOKEN: "..."
+        #   DEBUG: "true"
         run: |
           python3 tools/ground_truth/verify.py --mode=full
           python3 tools/ground_truth/gt_context.py check
           # citations in STATUS.yaml that this diff shifted: reported, not failed (the Stop hook repairs them)
-          python3 tools/ground_truth/remap_line_refs.py --check --base "${GT_BASE_REF:-HEAD~1}" STATUS.yaml || true
+          python3 tools/ground_truth/remap_line_refs.py --check --base "$GT_BASE_REF" STATUS.yaml || true
           # canaries: every claim carrying a mutation still goes red under it
           python3 tools/ground_truth/gt_mutation_selfcheck.py --strict
           # same three rules the Stop hook runs, against the pushed diff

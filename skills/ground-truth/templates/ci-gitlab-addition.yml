@@ -24,6 +24,10 @@ status-contract:
     - export GT_BASE_REF="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
     # git: the verifier shells out to it (ls-files, base-ref diff); slim/alpine python images ship without it.
     - (command -v apt-get >/dev/null && apt-get update -qq && apt-get install -y -qq git) || (command -v apk >/dev/null && apk add --no-cache git)
+    # CI_COMMIT_BEFORE_SHA is all zeros on the first push of a branch; fall back
+    # to the merge base with the default branch so verify, remap and the guard see a real base.
+    - git fetch --quiet origin "$CI_DEFAULT_BRANCH"
+    - GT_BASE_REF=$(git rev-parse --verify --quiet "${GT_BASE_REF}^{commit}" || git merge-base FETCH_HEAD HEAD); export GT_BASE_REF
     # Example only: install the same dependencies as the project's test
     # job (plus pyyaml and pytest, which the verifier itself needs) --
     # copy that job's install line rather than retyping it. Also export
@@ -35,7 +39,7 @@ status-contract:
     - python3 tools/ground_truth/verify.py --mode=full
     - python3 tools/ground_truth/gt_context.py check
     # citations in STATUS.yaml that this diff shifted: reported, not failed (the Stop hook repairs them)
-    - python3 tools/ground_truth/remap_line_refs.py --check --base "${GT_BASE_REF:-HEAD~1}" STATUS.yaml || true
+    - python3 tools/ground_truth/remap_line_refs.py --check --base "$GT_BASE_REF" STATUS.yaml || true
     # canaries: every claim carrying a mutation still goes red under it
     - python3 tools/ground_truth/gt_mutation_selfcheck.py --strict
     # same three rules the Stop hook runs, against the pushed diff

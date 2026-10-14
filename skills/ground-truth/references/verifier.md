@@ -215,7 +215,7 @@ SC-b без изменений: authoring-time доказательство «ch
 | Режим | База | Как получена |
 |---|---|---|
 | `sync` | `HEAD:<relpath>/STATUS.yaml` | `relpath` — от `git rev-parse --show-toplevel` (работает и в linked worktree, где `.git` — файл) |
-| `full` | `GT_BASE_REF`, если задан; `HEAD~1` — только если `GT_BASE_REF` не задан вовсе. Заданный, но нерезолвящийся `GT_BASE_REF` → WARN, **без молчаливого отката на `HEAD~1`** (сравнение с произвольным коммитом дало бы произвольный вердикт) | `GT_BASE_REF` ставит CI: GitHub — `origin/<base_ref>` на PR и `github.event.before` на push; GitLab — `CI_MERGE_REQUEST_DIFF_BASE_SHA`, иначе `CI_COMMIT_BEFORE_SHA` |
+| `full` | `GT_BASE_REF`, если задан; `HEAD~1` — только если `GT_BASE_REF` не задан вовсе. Заданный, но нерезолвящийся `GT_BASE_REF` → WARN, **без молчаливого отката на `HEAD~1`** (сравнение с произвольным коммитом дало бы произвольный вердикт) | `GT_BASE_REF` ставит CI: GitHub — `origin/<base_ref>` на PR и `github.event.before` на push; GitLab — `CI_MERGE_REQUEST_DIFF_BASE_SHA`, иначе `CI_COMMIT_BEFORE_SHA`. Нулевой before (первый пуш ветки) шаблоны CI заменяют на `git merge-base` с дефолтной веткой |
 
 **Вырожденные случаи (все — тихий skip или WARN, никогда ложный FAIL):**
 
