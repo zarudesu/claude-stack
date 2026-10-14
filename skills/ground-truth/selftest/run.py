@@ -3615,6 +3615,50 @@ def migrate_scenarios() -> bool:
                  cp.returncode == 3 and "reader.py" in listed and "reader.sh" in listed
                  and "doc_only.py" not in cp.stdout + cp.stderr, out(cp))
 
+    # (9) E3: a repo test that passed on STATUS.yaml and breaks after the move rolls everything back.
+    find_root = ("from pathlib import Path\nimport yaml\n\n\ndef _find_root(start):\n"
+                 "    for c in [start, *start.parents]:\n        if (c / {marks}).is_file():\n            return c\n"
+                 "    raise RuntimeError('no contract')\n\n\nROOT = _find_root(Path(__file__).resolve().parent)\n\n\n"
+                 "def test_contract():\n    assert {load}\n")
+    literal = ("from pathlib import Path\nimport yaml\n\n\ndef test_claims():\n"
+               "    root = Path(__file__).resolve().parents[1]\n"
+               "    assert yaml.safe_load(open(root / 'STATUS.yaml'))['claims']\n")
+    by_status = find_root.format(marks="'STATUS.yaml'",
+                                 load="yaml.safe_load((ROOT / 'STATUS.yaml').read_text())['claims']")
+    for label, rel, text, nested in (("literal open", "tests/test_literal.py", literal, False),
+                                     ("_find_root", "tests/test_find_root.py", by_status, False),
+                                     ("_find_root", "tests/test_find_root.py", by_status, True)):
+        top = SCRATCH_BASE / f"migrate-e3-{rel[11:-3]}{'-nested' if nested else ''}"
+        if nested:  # A parent clone that still has STATUS.yaml, as around a worktree.
+            top.mkdir()
+            (top / "STATUS.yaml").write_text("claims: [x]\n")
+        repo = prepare(top / "repo" if nested else top, files={rel: text})
+        cp_dry = migrate(repo, "--skill", str(SKILL_ROOT))
+        cp = migrate(repo, "--write", "--skill", str(SKILL_ROOT))
+        ok &= record(
+            f"migrate: E3, a test reading STATUS.yaml by {label}{' under a parent STATUS.yaml' if nested else ''} "
+            "-> dry run lists it, --write rc 1 naming it, rolled back, no .ground-truth/",
+            cp_dry.returncode == 0 and f"--write: {rel}" in cp_dry.stdout
+            and cp.returncode == 1 and "tests: BROKEN" in cp.stdout and "gt_store" in cp.stdout
+            and (f"opens {top.resolve() / 'STATUS.yaml'}" if nested else f"{rel}::test_") in cp.stdout
+            and "rolled back" in cp.stdout and (repo / "STATUS.yaml").is_file()
+            and not (repo / ".ground-truth").exists() and git(repo, "status", "--porcelain") == "",
+            f"dry={out(cp_dry)} write={out(cp)}",
+        )
+    both = prepare(SCRATCH_BASE / "migrate-e3-both", files={"tests/test_both.py": find_root.format(
+        marks="'STATUS.yaml').is_file() or (c / '.ground-truth' / 'contract.yaml'",
+        load="ROOT.joinpath('tools', 'ground_truth').is_dir()")})
+    cp = migrate(both, "--write", "--skill", str(SKILL_ROOT))
+    ok &= record("migrate: E3, a test that knows both layouts -> runs, tests same, rc 0",
+                 cp.returncode == 0 and "tests: same" in cp.stdout and "tests/test_both.py" in cp.stdout, out(cp))
+    nopytest = prepare(SCRATCH_BASE / "migrate-e3-nopytest", files={"tests/test_literal.py": literal})
+    with mock.patch("importlib.util.find_spec", return_value=None), \
+            contextlib.redirect_stdout(io.StringIO()) as buf:
+        rc = gt_migrate.main(["--write", "--root", str(nopytest), "--skill", str(SKILL_ROOT)])
+    ok &= record("migrate: E3 with no pytest -> one WARN 'E3 skipped' naming the test, no failure",
+                 rc == 0 and buf.getvalue().count("WARN E3 skipped:") == 1
+                 and "run tests/test_literal.py after the move" in buf.getvalue(), buf.getvalue())
+
     # (6) Staging: a contract without debt and an edited model.yaml are staged whole; a failed git add is an error.
     nodebt = prepare(SCRATCH_BASE / "migrate-nodebt", lambda t: t[:t.index("\ndebt:\n") + 1])
     cp = migrate(nodebt, "--write")

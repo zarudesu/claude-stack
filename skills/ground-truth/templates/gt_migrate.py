@@ -9,8 +9,11 @@ Without --write prints the plan and changes nothing. --write writes
 .ground-truth/contract.yaml, debt.yaml and areas/<id>.yaml, deletes
 STATUS.yaml and checks the result: the new layout loads to the same data
 (E1) and verify --mode=full, with no check executed, reports the same
-FAIL/WARN findings (E2). Any difference puts every file back; otherwise
-the contract change is staged for one commit. Claims, debt entries, meta
+FAIL/WARN findings (E2). Tests outside tools/ground_truth/ that name
+STATUS.yaml run under pytest before and after (E3): one that passed before
+must pass after, and no run may open a STATUS.yaml, say a parent clone's.
+Any difference puts every file back; otherwise the contract change is
+staged for one commit. Claims, debt entries, meta
 and edges keep their original text; a block that does not read back to the
 same value is written with yaml.safe_dump instead. A model.yaml source
 STATUS.yaml is dropped and the receipts of those areas, if fresh before,
@@ -27,6 +30,7 @@ import argparse
 import ast
 import collections
 import datetime
+import importlib.util
 import os
 import re
 import subprocess
@@ -47,6 +51,24 @@ GLOBAL = "global"
 OVERSIZED = 40
 WORKSPACE = ".ground-truth/workspace"
 LEGACY_KEYS = {"schema_version", "meta", "edges", "claims", "debt"}
+TEST_FILE = re.compile(r"test_.*\.py|.*_test\.py|conftest\.py")
+# E3 runner: prints the nodeids that passed and every existing STATUS.yaml the run opened.
+_PYTEST = '''
+import os, sys, pytest
+passed, opened = [], set()
+def audit(event, args):
+    if event == "open" and not isinstance(args[0], int):
+        path = os.path.abspath(os.fsdecode(args[0]))
+        if os.path.basename(path) == "STATUS.yaml" and os.path.isfile(path):
+            opened.add(path)
+class Passed:
+    def pytest_runtest_logreport(self, report):
+        if report.when == "call" and report.passed:
+            passed.append(report.nodeid)
+sys.addaudithook(audit)
+pytest.main(["-p", "no:cacheprovider", *sys.argv[1:]], plugins=[Passed()])
+print(*(f"E3 passed {n}" for n in passed), *(f"E3 opened {p}" for p in sorted(opened)), sep="\\n")
+'''
 # Contract file names and file:line inside them differ between layouts by design.
 _CONTRACT_REF = re.compile(
     r"(STATUS\.yaml|\.ground-truth/(?:contract|debt)\.yaml|\.ground-truth/areas/[\w.-]+\.yaml"
@@ -334,8 +356,8 @@ def reads_status(path: Path) -> bool:
                and id(n) not in docs for n in ast.walk(tree))
 
 
-def report(root: Path, plan: dict, skill: Path | None = None) -> list[str]:
-    """Print the plan; return the repo probes that still name STATUS.yaml."""
+def report(root: Path, plan: dict, skill: Path | None = None) -> tuple[list[str], list[str]]:
+    """Print the plan; return the repo probes that still name STATUS.yaml and the tests E3 runs."""
     groups, sources = plan["groups"], plan["sources"]
     width = max(map(len, groups), default=0) + 1
     print(f"{'area':{width}} {'claims':>6}  sources")
@@ -377,7 +399,26 @@ def report(root: Path, plan: dict, skill: Path | None = None) -> list[str]:
     if probes:
         print(f"probes that name {STATUS} (verify runs them; --write refuses until they change): "
               + ", ".join(probes))
-    return probes
+    tests = [p for p in by_hand if not p.startswith("tools/ground_truth/")
+             and TEST_FILE.fullmatch(Path(p).name) and reads_status(root / p)]
+    if tests and importlib.util.find_spec("pytest") is None:
+        print(f"WARN E3 skipped: no pytest for {sys.executable}; run {', '.join(tests)} after the move")
+        return probes, []
+    if tests:
+        print(f"E3: tests that name {STATUS}, run by pytest before and after --write: {', '.join(tests)}")
+    return probes, tests
+
+
+def run_tests(root: Path, tests: list[str]) -> tuple[set[str], list[str]]:
+    """E3: the nodeids that pass and the STATUS.yaml files opened; a conftest.py runs its directory."""
+    if not tests:
+        return set(), []
+    targets = sorted({str(Path(t).parent) if Path(t).name == "conftest.py" else t for t in tests})
+    cp = subprocess.run([sys.executable, "-c", _PYTEST, *targets], cwd=root, capture_output=True, text=True,
+                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    lines = cp.stdout.splitlines()
+    return ({line[10:] for line in lines if line.startswith("E3 passed ")},
+            [line[10:] for line in lines if line.startswith("E3 opened ")])
 
 
 def _norm(issues) -> collections.Counter:
@@ -403,9 +444,10 @@ def equivalence(root: Path, plan: dict, before: collections.Counter) -> tuple[li
     return e1, before - e2, e2 - before
 
 
-def write(root: Path, plan: dict) -> int:
+def write(root: Path, plan: dict, tests: list[str]) -> int:
     status_bytes = (root / STATUS).read_bytes()
     before = _norm(contract_lib.run(root, "full", execute=False))
+    passed = run_tests(root, tests)[0]
     new_dirs = [d for d in (root / gt_store.DIR, root / gt_store.AREAS) if not d.exists()]
     created: list[Path] = []
     model = plan["model"]
@@ -431,6 +473,7 @@ def write(root: Path, plan: dict) -> int:
             model[1].write_text(model[2])
         (root / STATUS).unlink()
         e1, lost, gained = equivalence(root, plan, before)
+        after, opened = run_tests(root, tests)
     except BaseException:
         rollback()
         raise
@@ -438,7 +481,12 @@ def write(root: Path, plan: dict) -> int:
     warns = sum(v for (sev, _, _), v in (lost + gained).items() if sev != "fail")
     print(f"data: {'same' if not e1 else 'DIFFERENT: ' + '; '.join(e1)}")
     print(f"equivalent: FAIL Δ{fails}, WARN Δ{warns}")
-    if e1 or lost or gained:
+    broken = [f"{n} passed before, not after" for n in sorted(passed - after)] + [f"opens {p}" for p in opened]
+    if tests:
+        print("tests: " + ("same" if not broken else "BROKEN; rewrite them on gt_store.load(root).data"))
+    for line in broken:
+        print(f"  ! {line}")
+    if e1 or lost or gained or broken:
         for (sev, cid, msg), _ in sorted(lost.items()):
             print(f"  - [{sev.upper()}] {cid} : {msg}")
         for (sev, cid, msg), _ in sorted(gained.items()):
@@ -511,7 +559,7 @@ def main(argv: list[str]) -> int:
     except (ContractError, ValueError, yaml.YAMLError) as exc:
         print(f"gt migrate: {exc}", file=sys.stderr)
         return 3
-    probes = report(root, plan, args.skill)
+    probes, tests = report(root, plan, args.skill)
     if not args.write:
         print("dry run: nothing written; run with --write to apply")
         return 0
@@ -520,7 +568,7 @@ def main(argv: list[str]) -> int:
               "read the contract through gt_store.load(root).data instead, commit, then run --write again",
               file=sys.stderr)
         return 3
-    return write(root, plan)
+    return write(root, plan, tests)
 
 
 if __name__ == "__main__":
