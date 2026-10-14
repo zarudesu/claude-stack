@@ -3228,6 +3228,17 @@ def sharded_guard_scenarios() -> bool:
     def edit_guard(rel: str) -> subprocess.CompletedProcess:
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(repo / rel)}, "cwd": str(repo),
                    "session_id": "s1"}
+
+    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
+    import i9_install
+
+    with added_file(sharded / "services" / "alpha" / "page.html", "<p></p>\n"):
+        fact = i9_install._coverage_other_extensions(sharded)
+    ok &= record(
+        "layout: i9 --facts reads meta.coverage from the sharded contract",
+        fact == "1 files under roots have extensions outside meta.coverage.extensions (top: .html×1)",
+        str(fact),
+    )
         return subprocess.run([sys.executable, str(TEMPLATES / "gt_edit_guard.py")], input=json.dumps(payload),
                               capture_output=True, text=True, timeout=60)
 

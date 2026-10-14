@@ -393,20 +393,17 @@ def _has_project_memory(repo: Path) -> bool:
 
 def _coverage_other_extensions(repo: Path) -> str | None:
     """The verifier's WARN about files under meta.coverage.roots that
-    meta.coverage.extensions leaves out, when STATUS.yaml already exists."""
-    status = repo / "STATUS.yaml"
-    if not status.is_file():
-        return None
+    meta.coverage.extensions leaves out, when the contract already exists."""
     templates = str(Path(__file__).resolve().parent.parent.parent / "templates")
     sys.path.insert(0, templates)
     saved_flag = sys.dont_write_bytecode
     sys.dont_write_bytecode = True  # templates/ ships to repos, keep it free of __pycache__
     try:
         import contract_lib  # noqa: E402
+        import gt_store  # noqa: E402
 
-        data = yaml.safe_load(status.read_text(encoding="utf-8")) or {}
-        issues = contract_lib.check_coverage(repo, data, "sync") if isinstance(data, dict) else []
-    except Exception:  # a broken STATUS.yaml is verify's to report, not this fact's
+        issues = contract_lib.check_coverage(repo, gt_store.load(repo).data, "sync")
+    except Exception:  # no contract yet, or a broken one: verify reports that, not this fact
         return None
     finally:
         sys.dont_write_bytecode = saved_flag
