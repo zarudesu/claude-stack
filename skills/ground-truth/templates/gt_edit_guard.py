@@ -156,11 +156,15 @@ def _locate(dirpath) -> tuple[Path | None, Path | None]:
     return Path(lines[0].strip()), git_dir
 
 
-def _stamp(root: Path) -> tuple[int, int, int]:
-    """(newest mtime, total size, file count) over the contract files: the
-    cache key. The count catches a deleted shard the other two may miss."""
+def _stamp(root: Path) -> tuple:
+    """(newest mtime, total size, file count) over the contract files, and
+    [mtime, size] of model.yaml or None: the cache key. The count catches a
+    deleted shard the other two may miss; model.yaml can set enforcement."""
     stats = [(root / rel).stat() for rel in gt_store.contract_files(root)]
-    return max(st.st_mtime_ns for st in stats), sum(st.st_size for st in stats), len(stats)
+    model = root / gt_store.MODEL
+    m = model.stat() if model.is_file() else None
+    return (max(st.st_mtime_ns for st in stats), sum(st.st_size for st in stats), len(stats),
+            [m.st_mtime_ns, m.st_size] if m else None)
 
 
 def _read_cache(cache_path: Path, st) -> dict | None:
@@ -170,7 +174,7 @@ def _read_cache(cache_path: Path, st) -> dict | None:
         return None
     if not isinstance(cfg, dict):
         return None
-    if [cfg.get("mtime_ns"), cfg.get("size"), cfg.get("files")] != list(st):
+    if [cfg.get("mtime_ns"), cfg.get("size"), cfg.get("files"), cfg.get("model")] != list(st):
         return None
     return cfg
 
@@ -199,6 +203,7 @@ def _build_cache(root: Path, st) -> dict:
         "mtime_ns": st[0],
         "size": st[1],
         "files": st[2],
+        "model": st[3],
         "roots": [r for r in coverage.get("roots") or [] if isinstance(r, str)],
         "exclude": [e for e in coverage.get("exclude") or [] if isinstance(e, str)],
         "enforcement": gt_store.enforcement(root),

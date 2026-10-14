@@ -250,6 +250,21 @@ else
   fail "edit guard: model.yaml enforcement: blocking over an advisory meta -> exit 2 (rc=$rc out=$out)"
 fi
 
+# Case 7c: guard cache built while model.yaml said advisory; model.yaml
+# switched to blocking (same size) -> the next edit is blocked
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_guard_repo
+mkdir -p "$REPO/.ground-truth"
+printf 'enforcement: advisory\n' > "$REPO/.ground-truth/model.yaml"
+run_edit_hook "$REPO/app/billing.py" >/dev/null 2>&1; rc=$?
+printf 'enforcement: blocking\n' > "$REPO/.ground-truth/model.yaml"
+out2=$(run_edit_hook "$REPO/app/billing.py" 2>&1); rc2=$?
+if [ $rc -eq 0 ] && [ $rc2 -eq 2 ]; then
+  pass "edit guard: model.yaml switched to blocking after the cache was built -> exit 2"
+else
+  fail "edit guard: model.yaml switched to blocking after the cache was built -> exit 2 (rc=$rc rc2=$rc2 out2=$out2)"
+fi
+
 # Case 8: STATUS.yaml already dirty -> the claim is being written, exit 0
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_guard_repo
