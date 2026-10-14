@@ -238,6 +238,18 @@ else
   fail "edit guard: uncovered file + advisory -> exit 0 with the hint (rc=$rc out=$out)"
 fi
 
+# Case 7b: meta advisory, model.yaml blocking -> blocking, as in the Stop hook
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_guard_repo
+mkdir -p "$REPO/.ground-truth"
+printf 'enforcement: blocking\n' > "$REPO/.ground-truth/model.yaml"
+out=$(run_edit_hook "$REPO/app/billing.py" 2>&1); rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "no claim covers it"; then
+  pass "edit guard: model.yaml enforcement: blocking over an advisory meta -> exit 2"
+else
+  fail "edit guard: model.yaml enforcement: blocking over an advisory meta -> exit 2 (rc=$rc out=$out)"
+fi
+
 # Case 8: STATUS.yaml already dirty -> the claim is being written, exit 0
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_guard_repo

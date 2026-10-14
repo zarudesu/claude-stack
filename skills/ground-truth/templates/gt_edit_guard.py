@@ -201,7 +201,7 @@ def _build_cache(root: Path, st) -> dict:
         "files": st[2],
         "roots": [r for r in coverage.get("roots") or [] if isinstance(r, str)],
         "exclude": [e for e in coverage.get("exclude") or [] if isinstance(e, str)],
-        "enforcement": meta.get("enforcement", "advisory"),
+        "enforcement": gt_store.enforcement(root),
         "paths": paths,
     }
 
