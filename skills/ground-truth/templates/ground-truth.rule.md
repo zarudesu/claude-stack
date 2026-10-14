@@ -30,7 +30,7 @@ or use --all merely to clear stale. Unchanged semantics may need review but
 not a prose edit. An input change after review requires a new delta check.
 
 Before finishing, obtain the fresh task packet, run the applicable tests,
-`{{PY}} tools/ground_truth/gt_context.py check`, and, when STATUS.yaml exists,
+`{{PY}} tools/ground_truth/gt_context.py check`, and, when the contract exists,
 `{{PY}} tools/ground_truth/verify.py --mode=sync`.
 Stop queues maintenance drift in .ground-truth/pending.yaml instead of blocking;
 fix entries of the areas you touch, an overflowing or escalated area blocks Stop.
@@ -38,7 +38,8 @@ Global stale from independent work is an explicit limitation, not evidence that
 your task failed or the whole workspace is ready. Report changed areas, revision,
 checks and unresolved dependencies. Hooks never supply semantic approval.
 
-STATUS.yaml indexes executable claims in its declared scope. New/raised
+The contract (STATUS.yaml, or .ground-truth/contract.yaml with areas/*.yaml)
+indexes executable claims in its declared scope. New/raised
 implemented or partial claims require baseline green → meaningful mutation red
 → restored green, in isolation. Stop does not mutate working files; CI supplies
 the required proof. Skip, checker error or incomplete coverage is not verified.

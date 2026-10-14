@@ -16,7 +16,7 @@ import (
 )
 
 // findRepoRoot walks up from the current working directory until it finds
-// a directory containing STATUS.yaml, or fails the test if none exists
+// a directory containing STATUS.yaml or .ground-truth/contract.yaml, or fails the test if none exists
 // within a reasonable number of parent directories.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
@@ -28,13 +28,16 @@ func findRepoRoot(t *testing.T) string {
 		if _, err := os.Stat(filepath.Join(dir, "STATUS.yaml")); err == nil {
 			return dir
 		}
+		if _, err := os.Stat(filepath.Join(dir, ".ground-truth", "contract.yaml")); err == nil {
+			return dir
+		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break
 		}
 		dir = parent
 	}
-	t.Fatalf("could not find STATUS.yaml walking up from %s", dir)
+	t.Fatalf("could not find STATUS.yaml or .ground-truth/contract.yaml walking up from %s", dir)
 	return ""
 }
 

@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 function findRepoRoot(startDir: string): string {
   let dir = startDir;
   for (let i = 0; i < 32; i++) {
-    if (fs.existsSync(path.join(dir, "STATUS.yaml"))) {
+    if (fs.existsSync(path.join(dir, "STATUS.yaml")) || fs.existsSync(path.join(dir, ".ground-truth", "contract.yaml"))) {
       return dir;
     }
     const parent = path.dirname(dir);
@@ -19,7 +19,7 @@ function findRepoRoot(startDir: string): string {
     }
     dir = parent;
   }
-  throw new Error(`could not find STATUS.yaml walking up from ${startDir}`);
+  throw new Error(`could not find STATUS.yaml or .ground-truth/contract.yaml walking up from ${startDir}`);
 }
 
 describe("status contract", () => {

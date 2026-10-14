@@ -14,9 +14,9 @@ import pytest
 
 def _find_root(start: Path) -> Path:
     for candidate in [start, *start.parents]:
-        if (candidate / "STATUS.yaml").is_file():
+        if (candidate / "STATUS.yaml").is_file() or (candidate / ".ground-truth" / "contract.yaml").is_file():
             return candidate
-    raise RuntimeError(f"STATUS.yaml not found above {start}")
+    raise RuntimeError(f"STATUS.yaml or .ground-truth/contract.yaml not found above {start}")
 
 
 ROOT = _find_root(Path(__file__).resolve().parent)

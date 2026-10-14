@@ -1,7 +1,8 @@
 <!-- Installer: replace {{PY}} with this project's interpreter. Installed instead of ground-truth.rule.md while the repo has no .ground-truth/model.yaml. -->
 # ground-truth: STATUS contract
 
-STATUS.yaml indexes executable claims in its declared scope; it is not a map of
+The contract (STATUS.yaml, or .ground-truth/contract.yaml with areas/*.yaml)
+indexes executable claims in its declared scope; it is not a map of
 the whole project. Find the claims for the code you change with a grep
 (`rg -n 'path/to/file' STATUS.yaml`), then
 `{{PY}} tools/ground_truth/blast_radius.py <path-or-claim-id>` for importers and
@@ -20,7 +21,7 @@ mutation red → restored green, in isolation. Stop does not mutate working file
 CI supplies the required proof. Skip, checker error or incomplete coverage is
 not verified.
 
-Before finishing, run the applicable tests and, when STATUS.yaml exists,
+Before finishing, run the applicable tests and, when the contract exists,
 `{{PY}} tools/ground_truth/verify.py --mode=sync`. Report changed claims and
 checks. Hooks never supply semantic approval.
 
