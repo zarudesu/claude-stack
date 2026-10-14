@@ -33,6 +33,8 @@ setup_repo() {
   mkdir -p "$REPO/.claude/hooks" "$REPO/tools/ground_truth"  # gt-allow: real install path, not prose
   cp "$TEMPLATES_DIR/ground-truth-sync-check.sh" "$REPO/.claude/hooks/ground-truth-sync-check.sh"  # gt-allow: real install path, not prose
   cp "$TEMPLATES_DIR/ground-truth-session-start.sh" "$REPO/.claude/hooks/ground-truth-session-start.sh"  # gt-allow: real install path, not prose
+  # The hooks read enforcement and the layout through gt_store.
+  cp "$TEMPLATES_DIR/gt_store.py" "$REPO/tools/ground_truth/gt_store.py"  # gt-allow: real install path, not prose
   chmod +x "$REPO/.claude/hooks/"*.sh  # gt-allow: real install path, not prose
 
   cat > "$REPO/tools/ground_truth/verify.py" <<'PYEOF'
@@ -1047,6 +1049,108 @@ if [ $rc -eq 0 ] \
   pass "C3: SessionStart surfaces sync warnings on a green verifier"
 else
   fail "C3: SessionStart surfaces sync warnings on a green verifier (rc=$rc out=$out)"
+fi
+
+# ---------------------------------------------------------------------
+# Sharded layout: .ground-truth/contract.yaml holds meta, areas/<id>.yaml
+# the claims. The hooks gate on it, name it "contract (.ground-truth/)"
+# and refuse STATUS.yaml next to it whatever the enforcement.
+# ---------------------------------------------------------------------
+
+# Splits the committed STATUS.yaml into contract.yaml (everything before
+# claims:) and areas/app.yaml (claims:), then commits the move.
+shard_repo() {
+  mkdir -p "$REPO/.ground-truth/areas"
+  sed -n '/^claims:/,$!p' "$REPO/STATUS.yaml" | sed 's/^schema_version: 1$/schema_version: 2/' > "$REPO/.ground-truth/contract.yaml"
+  { echo "area: app"; sed -n '/^claims:/,$p' "$REPO/STATUS.yaml"; } > "$REPO/.ground-truth/areas/app.yaml"
+  rm "$REPO/STATUS.yaml"
+  (cd "$REPO" && git add -A && git -c user.email=t@example.com -c user.name=t commit -q -m shard)
+}
+
+# Case SH1: dirty + fail + blocking on the sharded layout -> exit 2 naming the contract
+export ENFORCEMENT=blocking GT_VERIFY_EXIT=1
+setup_repo
+shard_repo
+dirty_repo
+out=$(run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "ground-truth: contract (.ground-truth/) out of sync" \
+   && ! printf '%s' "$out" | grep -q "STATUS.yaml out of sync"; then
+  pass "SH1: sharded, dirty + fail + blocking -> exit 2 naming contract (.ground-truth/)"
+else
+  fail "SH1: sharded, dirty + fail + blocking -> exit 2 naming contract (.ground-truth/) (rc=$rc out=$out)"
+fi
+
+# Case SH2: same, advisory -> exit 0 with the advisory text; SessionStart
+# names the contract in its out-of-sync block
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=1
+setup_repo
+shard_repo
+dirty_repo
+out=$(run_stop_hook false 2>&1); rc=$?
+out2=$(run_session_start_hook); rc2=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "ground-truth (advisory): contract (.ground-truth/) drift detected" \
+   && [ $rc2 -eq 0 ] && printf '%s' "$out2" | grep -q "## ground-truth: contract (.ground-truth/) is currently out of sync"; then
+  pass "SH2: sharded, advisory -> Stop exit 0, both hooks name contract (.ground-truth/)"
+else
+  fail "SH2: sharded, advisory -> Stop exit 0, both hooks name contract (.ground-truth/) (rc=$rc rc2=$rc2 out=$out out2=$out2)"
+fi
+
+# Case SH3: a shifted citation inside a shard is auto-repaired by the Stop hook
+export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
+setup_remap_repo
+shard_repo
+shift_pricing_lines
+out=$(run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qx "ground-truth: auto-repaired 1 line refs in contract (.ground-truth/)" \
+   && grep -q "app/pricing.py:5 for" "$REPO/.ground-truth/areas/app.yaml" && [ ! -f "$REPO/STATUS.yaml" ]; then
+  pass "SH3: sharded, Stop hook auto-repairs a shifted citation in the shard"
+else
+  fail "SH3: sharded, Stop hook auto-repairs a shifted citation in the shard (rc=$rc out=$out)"
+fi
+
+# Case SH4: remap --check --base HEAD~1 STATUS.yaml on the migration commit
+# (legacy at the base, shards in the tree, cited file shifted in the same
+# commit) -> exit 0: the shards have no counterpart at the base
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_remap_repo
+shift_pricing_lines
+(cd "$REPO" && sed 's/app\/pricing.py:3 /app\/pricing.py:5 /' STATUS.yaml > STATUS.new && mv STATUS.new STATUS.yaml)
+shard_repo
+out=$(cd "$REPO" && python3 tools/ground_truth/remap_line_refs.py --check --base HEAD~1 STATUS.yaml 2>&1); rc=$?  # gt-allow: real install path, not prose
+if [ $rc -eq 0 ] && [ -z "$out" ] && grep -q "app/pricing.py:5 for" "$REPO/.ground-truth/areas/app.yaml"; then
+  pass "SH4: remap --check --base HEAD~1 STATUS.yaml on the migration commit -> exit 0"
+else
+  fail "SH4: remap --check --base HEAD~1 STATUS.yaml on the migration commit -> exit 0 (rc=$rc out=$out)"
+fi
+
+# Case SH5: strict edit guard through the .sh hook on the sharded layout
+# blocks an uncovered file under the roots and names the contract
+export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
+setup_guard_repo
+shard_repo
+out=$(run_edit_hook "$REPO/app/billing.py" 2>&1); rc=$?
+if [ $rc -eq 2 ] && printf '%s' "$out" | grep -q "no claim covers it -- add a claim to contract (.ground-truth/) first"; then
+  pass "SH5: sharded, strict edit guard blocks an uncovered file naming contract (.ground-truth/)"
+else
+  fail "SH5: sharded, strict edit guard blocks an uncovered file naming contract (.ground-truth/) (rc=$rc out=$out)"
+fi
+
+# Case SH6: STATUS.yaml next to .ground-truth/contract.yaml, even advisory
+# -> Stop exit 2, edit guard blocks, SessionStart warns; all with the store's text
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_guard_repo
+mkdir -p "$REPO/.ground-truth"
+sed -n '/^claims:/,$!p' "$REPO/STATUS.yaml" | sed 's/^schema_version: 1$/schema_version: 2/' > "$REPO/.ground-truth/contract.yaml"
+mixed="both STATUS.yaml and .ground-truth/contract.yaml exist; run \`git checkout\` or finish \`gt migrate\`"
+out=$(run_stop_hook false 2>&1); rc=$?
+out2=$(run_edit_hook "$REPO/app/pricing.py" 2>&1); rc2=$?
+out3=$(run_session_start_hook); rc3=$?
+if [ $rc -eq 2 ] && [ "$out" = "ground-truth: $mixed" ] \
+   && [ $rc2 -eq 2 ] && [ "$out2" = "ground-truth: $mixed" ] \
+   && [ $rc3 -eq 0 ] && printf '%s' "$out3" | grep -qxF "## ground-truth: $mixed"; then
+  pass "SH6: both layouts -> Stop exit 2, edit guard blocks, SessionStart warns"
+else
+  fail "SH6: both layouts -> Stop exit 2, edit guard blocks, SessionStart warns (rc=$rc rc2=$rc2 rc3=$rc3 out=$out out2=$out2 out3=$out3)"
 fi
 
 # ---------------------------------------------------------------------

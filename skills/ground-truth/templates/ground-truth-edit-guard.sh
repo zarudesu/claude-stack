@@ -30,7 +30,7 @@ fi
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 root=$(git rev-parse --show-toplevel)
 guard="$root/tools/ground_truth/gt_edit_guard.py"
-{ [ -f "$guard" ] && [ -f "$root/STATUS.yaml" ]; } || exit 0
+{ [ -f "$guard" ] && { [ -f "$root/STATUS.yaml" ] || [ -f "$root/.ground-truth/contract.yaml" ]; }; } || exit 0
 
 # The system python lacks the project's own deps (pyyaml, etc.) -- the
 # guard parses STATUS.yaml on a cache miss and would fail on the import.

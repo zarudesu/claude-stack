@@ -63,7 +63,10 @@ fi
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 root=$(git rev-parse --show-toplevel)
-status_file="$root/STATUS.yaml"
+# The contract: legacy STATUS.yaml or sharded .ground-truth/contract.yaml.
+has_contract() { [ -f "$root/STATUS.yaml" ] || [ -f "$root/.ground-truth/contract.yaml" ]; }
+name="STATUS.yaml"
+[ -f "$root/STATUS.yaml" ] || name="contract (.ground-truth/)"
 
 # The system python lacks the project's own deps (pyyaml, etc.) -- running
 # the verifier under it reports false FAILs on import, not real drift.
@@ -87,7 +90,7 @@ git -C "$root" status --porcelain 2>/dev/null | grep -q . || exit 0
 # Memory runs before the STATUS shortcut: a memory-only repo has no STATUS.yaml.
 # No helper installed (no .ground-truth/model.yaml at install time) -> skipped.
 memory="$root/tools/ground_truth/gt_context.py"
-{ [ -f "$memory" ] || { [ -f "$status_file" ] && [ -f "$root/tools/ground_truth/verify.py" ]; }; } || exit 0
+{ [ -f "$memory" ] || { has_contract && [ -f "$root/tools/ground_truth/verify.py" ]; }; } || exit 0
 # A broken interpreter blocks once per stop; stop_hook_active above lets the
 # next stop through, so this can not hold the session.
 if ! env_err=$("$py" -c 'import yaml' 2>&1); then
@@ -107,20 +110,32 @@ if [ -f "$memory" ]; then
   memory_rc=$?
   [ "$memory_rc" -ne 0 ] && exit 2
 fi
-[ -f "$status_file" ] || gate_exit
+has_contract || gate_exit
 verifier="$root/tools/ground_truth/verify.py"
 [ -f "$verifier" ] || gate_exit
 
-# Read the current enforcement policy before running checks.
-mode=$("$py" -c "
+# Read the current enforcement policy before running checks. Both layouts
+# on disk is red whatever the policy: which contract to check is unknown.
+if ! mode=$("$py" -c "
 import sys
-import yaml
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/tools/ground_truth')
 try:
-    data = yaml.safe_load(open(sys.argv[1])) or {}
-    print((data.get('meta') or {}).get('enforcement', 'advisory'))
+    import gt_store
 except Exception:
     print('advisory')
-" "$status_file" 2>/dev/null)
+    sys.exit(0)
+try:
+    print(gt_store.enforcement(Path(sys.argv[1])))
+except gt_store.MixedLayoutError as exc:
+    print(exc)
+    sys.exit(3)
+except Exception:
+    print('advisory')
+" "$root" 2>/dev/null); then
+  echo "ground-truth: $mode" >&2
+  exit 2
+fi
 [ -z "$mode" ] && mode=advisory
 
 # Trivial line shifts are repaired before verify reads STATUS.yaml: a quoted
@@ -133,7 +148,7 @@ remapper="$root/tools/ground_truth/remap_line_refs.py"
 if [ -f "$remapper" ]; then
   n=$(cd "$root" && "$py" "$remapper" --repair --base HEAD STATUS.yaml 2>/dev/null)
   if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
-    echo "ground-truth: auto-repaired $n line refs in STATUS.yaml" >&2
+    echo "ground-truth: auto-repaired $n line refs in $name" >&2
     [ -f "$pending" ] && "$py" "$pending" --root "$root" repaired "$n"
   fi
 fi
@@ -189,19 +204,19 @@ escalate=""
 if [ "$mode" = "blocking" ] && [ -f "$state" ]; then
   n=$("$py" "$state" --root "$root" stop-red "$sid" 2>/dev/null)
   if [ -n "$n" ] && [ "$n" -ge 3 ] 2>/dev/null; then
-    escalate="ESCALATE: STATUS.yaml still red after $n sync rounds -- stop patching, report the red checks below to the owner"
+    escalate="ESCALATE: $name still red after $n sync rounds -- stop patching, report the red checks below to the owner"
   fi
 fi
 
 if [ "$mode" = "blocking" ]; then
   [ -n "$escalate" ] && echo "$escalate" >&2
-  echo "ground-truth: STATUS.yaml out of sync -- fix before stopping:" >&2
+  echo "ground-truth: $name out of sync -- fix before stopping:" >&2
   [ $rc -ne 0 ] && echo "$out" >&2
   [ $guard_rc -ne 0 ] && echo "$guard_out" >&2
   [ $remap_rc -eq 1 ] && echo "$remap_out" >&2
   exit 2
 else
-  echo "ground-truth (advisory): STATUS.yaml drift detected, not blocking yet:" >&2
+  echo "ground-truth (advisory): $name drift detected, not blocking yet:" >&2
   [ $rc -ne 0 ] && echo "$out" >&2
   [ $guard_rc -ne 0 ] && echo "$guard_out" >&2
   [ $remap_rc -eq 1 ] && echo "$remap_out" >&2

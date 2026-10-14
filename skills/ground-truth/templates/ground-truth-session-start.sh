@@ -44,7 +44,10 @@ fi
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 root=$(git rev-parse --show-toplevel)
-status_file="$root/STATUS.yaml"
+# The contract: legacy STATUS.yaml or sharded .ground-truth/contract.yaml.
+has_contract() { [ -f "$root/STATUS.yaml" ] || [ -f "$root/.ground-truth/contract.yaml" ]; }
+name="STATUS.yaml"
+[ -f "$root/STATUS.yaml" ] || name="contract (.ground-truth/)"
 
 # The system python lacks the project's own deps (pyyaml, etc.) -- running
 # the verifier under it reports false FAILs on import, not real drift.
@@ -63,7 +66,7 @@ done
 
 # Memory covers committed changes and sibling repositories too. No model calls or writes.
 memory="$root/tools/ground_truth/gt_context.py"
-{ [ -f "$memory" ] || { [ -f "$status_file" ] && [ -f "$root/tools/ground_truth/verify.py" ]; }; } || exit 0
+{ [ -f "$memory" ] || { has_contract && [ -f "$root/tools/ground_truth/verify.py" ]; }; } || exit 0
 if ! env_err=$("$py" -c 'import yaml' 2>&1); then
   echo "## ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py"
   exit 0
@@ -72,7 +75,7 @@ fi
 # One line about deferred drift, only when the queue is not empty.
 pending="$root/tools/ground_truth/gt_pending.py"
 [ -f "$pending" ] && "$py" "$pending" --root "$root" summary
-[ -f "$status_file" ] || exit 0
+has_contract || exit 0
 [ -f "$root/tools/ground_truth/verify.py" ] || exit 0
 
 # A restart after compaction or a crash resets the session's acks and red
@@ -81,21 +84,33 @@ pending="$root/tools/ground_truth/gt_pending.py"
 state="$root/tools/ground_truth/gt_hook_state.py"
 [ -f "$state" ] && "$py" "$state" --root "$root" session-start "$sid" >/dev/null 2>&1
 
-# Read enforcement the same way the Stop hook does.
-mode=$("$py" -c "
+# Read enforcement the same way the Stop hook does; both layouts on disk
+# is reported here and blocks at Stop.
+if ! mode=$("$py" -c "
 import sys
-import yaml
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/tools/ground_truth')
 try:
-    data = yaml.safe_load(open(sys.argv[1])) or {}
-    print((data.get('meta') or {}).get('enforcement', 'advisory'))
+    import gt_store
 except Exception:
     print('advisory')
-" "$status_file" 2>/dev/null)
+    sys.exit(0)
+try:
+    print(gt_store.enforcement(Path(sys.argv[1])))
+except gt_store.MixedLayoutError as exc:
+    print(exc)
+    sys.exit(3)
+except Exception:
+    print('advisory')
+" "$root" 2>/dev/null); then
+  echo "## ground-truth: $mode"
+  exit 0
+fi
 [ -z "$mode" ] && mode=advisory
 
 cat <<CARDEOF
 ## ground-truth contract active (enforcement: $mode)
-- Understand affected behavior and consumers; inspect the diff and run relevant tests. STATUS.yaml covers only its declared scope.
+- Understand affected behavior and consumers; inspect the diff and run relevant tests. $name covers only its declared scope.
 - Update claims only when their meaning, path or evidence changes. A status raise needs green baseline, red mutation, restored green evidence.
 - Skipped or incomplete checks are not proof. Repeated failure: diagnose and report, do not weaken the check.
 - Pre-edit gates are opt-in (GT_STRICT_EDIT_GUARD=1). Details: .claude/rules/ground-truth.md
@@ -107,14 +122,14 @@ if [ $rc -eq 0 ]; then
   warn_out=$(printf '%s\n' "$out" | grep '^\[WARN\]')
   if [ -n "$warn_out" ]; then
     n=$(printf '%s\n' "$warn_out" | wc -l | tr -d ' ')
-    echo "## ground-truth: $n warnings in STATUS.yaml (not blocking; inspect relevant warnings)"
+    echo "## ground-truth: $n warnings in $name (not blocking; inspect relevant warnings)"
     printf '%s\n' "$warn_out" | head -3
     [ "$n" -gt 3 ] && echo "... $((n - 3)) more: $py tools/ground_truth/verify.py --mode=sync --show-warn"
   fi
   exit 0
 fi
 
-echo "## ground-truth: STATUS.yaml is currently out of sync"
+echo "## ground-truth: $name is currently out of sync"
 echo '```'
 echo "$out"
 echo '```'

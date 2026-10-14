@@ -38,6 +38,12 @@ by both --check and --apply, so a second run against the same base does
 not shift it again. A STATUS_FILE with no counterpart at <base> is
 treated as entirely working-tree coordinates.
 
+A literal STATUS.yaml argument on the sharded layout (.ground-truth/
+contract.yaml next to areas/*.yaml and debt.yaml) runs over each of those
+files in turn: the exit code is the highest one, --repair prints the
+total. A shard with no counterpart at <base> (the migration commit) is
+working-tree coordinates by the rule above.
+
 Usage: remap_line_refs.py [--base HEAD] [--apply] [--dry-run] [--check]
                            [--repair] [--pre PATH] [--report PATH] STATUS_FILE
 
@@ -78,8 +84,12 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gt_store  # noqa: E402
 
 KEY_RE = re.compile(r"^\s*(?:- )?(note|description|why|reason|evidence):\s")
 ID_RE = re.compile(r"^\s*- id:\s*(\S+)")
@@ -564,50 +574,60 @@ def main(argv: list[str]) -> int:
     elif not args.check:
         print("note: no --pre given, prose-form citations are reported but not rewritten", file=sys.stderr)
 
-    try:
-        with open(args.status_file, newline="", encoding="utf-8") as f:
-            lines = f.read().splitlines(keepends=True)
-    except OSError as exc:
-        print(f"error: cannot read {args.status_file}: {exc}", file=sys.stderr)
-        return err_code
+    files = [args.status_file]
+    if args.status_file == gt_store.STATUS and gt_store.detect_layout(Path.cwd()) == gt_store.SHARDED:
+        files = gt_store.contract_files(Path.cwd())
+    stale = repaired = 0
+    for status_file in files:
+        try:
+            with open(status_file, newline="", encoding="utf-8") as f:
+                lines = f.read().splitlines(keepends=True)
+        except OSError as exc:
+            print(f"error: cannot read {status_file}: {exc}", file=sys.stderr)
+            return err_code
 
-    wt_lines = worktree_citation_lines(args.base, args.status_file)
-    out_lines, totals, rewritten, deleted, unparsed, assoc_risk = process_status_file(
-        lines, mappers, pre_blocks, wt_lines, args.base if args.repair else None,
-    )
+        wt_lines = worktree_citation_lines(args.base, status_file)
+        out_lines, totals, rewritten, deleted, unparsed, assoc_risk = process_status_file(
+            lines, mappers, pre_blocks, wt_lines, args.base if args.repair else None,
+        )
+
+        if args.check:
+            for r in rewritten:
+                old = r["old"][1:] if r["old"].startswith(":") else r["old"]
+                new = r["new"][1:] if r["new"].startswith(":") else r["new"]
+                print(f"{status_file}:{r['line']}: {r['path']}:{old} -> {new}")
+            stale += len(rewritten)
+            continue
+
+        if not args.repair:
+            write_report(args.report, totals, rewritten, deleted, unparsed, assoc_risk)
+
+        if (args.apply and not args.dry_run) or (args.repair and rewritten):
+            new_text = "".join(out_lines)
+            try:
+                yaml.safe_load(new_text)
+            except yaml.YAMLError as exc:
+                print(f"error: refusing to write, result does not parse as YAML: {exc}", file=sys.stderr)
+                return 1
+            dirname = os.path.dirname(os.path.abspath(status_file)) or "."
+            tmp_path = os.path.join(dirname, f".{os.path.basename(status_file)}.tmp{os.getpid()}")
+            try:
+                with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+                    f.write(new_text)
+                os.replace(tmp_path, status_file)
+            except OSError as exc:
+                print(f"error: failed to write {status_file}: {exc}", file=sys.stderr)
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                return 1
+        repaired += len(rewritten)
 
     if args.check:
-        for r in rewritten:
-            old = r["old"][1:] if r["old"].startswith(":") else r["old"]
-            new = r["new"][1:] if r["new"].startswith(":") else r["new"]
-            print(f"{args.status_file}:{r['line']}: {r['path']}:{old} -> {new}")
-        if rewritten:
+        if stale:
             print(f"fix: {sys.executable} tools/ground_truth/remap_line_refs.py --repair --base {args.base} {args.status_file}")
-        return 1 if rewritten else 0
-
-    if not args.repair:
-        write_report(args.report, totals, rewritten, deleted, unparsed, assoc_risk)
-
-    if (args.apply and not args.dry_run) or (args.repair and rewritten):
-        new_text = "".join(out_lines)
-        try:
-            yaml.safe_load(new_text)
-        except yaml.YAMLError as exc:
-            print(f"error: refusing to write, result does not parse as YAML: {exc}", file=sys.stderr)
-            return 1
-        dirname = os.path.dirname(os.path.abspath(args.status_file)) or "."
-        tmp_path = os.path.join(dirname, f".{os.path.basename(args.status_file)}.tmp{os.getpid()}")
-        try:
-            with open(tmp_path, "w", newline="", encoding="utf-8") as f:
-                f.write(new_text)
-            os.replace(tmp_path, args.status_file)
-        except OSError as exc:
-            print(f"error: failed to write {args.status_file}: {exc}", file=sys.stderr)
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            return 1
+        return 1 if stale else 0
     if args.repair:
-        print(len(rewritten))
+        print(repaired)
     return 0
 
 
