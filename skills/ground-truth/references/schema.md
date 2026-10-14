@@ -233,7 +233,7 @@ meta.coverage.exclude: ["scripts/one_off/**"]
 - **Границы блока** claim'а в файле — от строки, содержащей `- id: <id>`, до строки перед следующей `- id:` (или следующим top-level ключом файла, если claim последний).
 - Команда: `git log -1 --format=%ad --date=short -L <start>,<end>:STATUS.yaml`.
 - Нет вывода (файл не закоммичен, локальные незакоммиченные правки блока) → **skip**, не WARN и не FAIL — не с чем сравнивать.
-- Дата старше `meta.stale_after_days` (по умолчанию 30) → **WARN** `live_state note last touched <date>, recheck it`. Никогда FAIL — это нудж перепроверить, не поломанный контракт (spec §2.6).
+- Дата старше `meta.stale_after_days` (по умолчанию 30) → **WARN** `live_state block last touched <date> (stale since <date>, limit <N>d)` — только абсолютные даты, текст не меняется день ото дня. Никогда FAIL — это нудж перепроверить, не поломанный контракт (spec §2.6).
 
 Проверяется только в `--mode=full` (дорогая операция, `git log -L` — не на каждый Stop).
 

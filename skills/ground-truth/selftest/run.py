@@ -3241,9 +3241,10 @@ def sharded_layout_scenarios() -> bool:
     with patched(global_shard, f"  observed: '{TODAY}'\n", "  observed: '2000-01-01'\n"):
         issues = contract_lib.check_stale_live_state(sharded, contract_lib.load_contract(sharded))
         ok &= record(
-            "layout: live_state observed long ago -> WARN",
-            [(i.severity, i.claim_id) for i in issues] == [("warn", "alpha_health_live")]
-            and "last touched 2000-01-01" in issues[0].message,
+            "layout: live_state observed long ago -> WARN with absolute dates only",
+            [(i.severity, i.claim_id, i.message) for i in issues] == [(
+                "warn", "alpha_health_live",
+                "live_state block last touched 2000-01-01 (stale since 2000-02-01, limit 30d)")],
             str(issues),
         )
 

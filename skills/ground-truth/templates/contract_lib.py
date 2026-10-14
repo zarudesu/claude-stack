@@ -1972,6 +1972,12 @@ def _find_claim_block(lines: list[str], claim_id: str) -> tuple[int, int] | None
     return start + 1, end
 
 
+def _stale_live(cid: str, touched: datetime.date, limit: int) -> Issue:
+    """Absolute dates only, so the message reads the same on every day it is shown."""
+    since = touched + datetime.timedelta(days=limit + 1)
+    return Issue("warn", cid, f"live_state block last touched {touched} (stale since {since}, limit {limit}d)")
+
+
 def check_stale_live_state(root: Path, data: dict) -> list[Issue]:
     issues: list[Issue] = []
     meta = data.get("meta", {}) or {}
@@ -1979,15 +1985,9 @@ def check_stale_live_state(root: Path, data: dict) -> list[Issue]:
     if gt_store.detect_layout(root) == gt_store.SHARDED:
         return _stale_observed(data, stale_after_days)
     for cid, date_str in legacy_live_state_dates(root, data).items():
-        age = (datetime.date.today() - datetime.date.fromisoformat(date_str)).days
-        if age > stale_after_days:
-            issues.append(
-                Issue(
-                    "warn",
-                    cid,
-                    f"live_state block last touched {date_str} ({age}d ago, limit {stale_after_days}d)",
-                )
-            )
+        touched = datetime.date.fromisoformat(date_str)
+        if (datetime.date.today() - touched).days > stale_after_days:
+            issues.append(_stale_live(cid, touched, stale_after_days))
     return issues
 
 
@@ -2064,15 +2064,8 @@ def _stale_observed(data: dict, stale_after_days: int) -> list[Issue]:
                 )
             )
             continue
-        age = (datetime.date.today() - observed).days
-        if age > stale_after_days:
-            issues.append(
-                Issue(
-                    "warn",
-                    cid,
-                    f"live_state block last touched {date_str} ({age}d ago, limit {stale_after_days}d)",
-                )
-            )
+        if (datetime.date.today() - observed).days > stale_after_days:
+            issues.append(_stale_live(cid, observed, stale_after_days))
     return issues
 
 

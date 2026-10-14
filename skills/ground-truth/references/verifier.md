@@ -71,7 +71,7 @@
 2. Блок claim'а = от этой строки до строки перед следующей `- id:` или следующим top-level ключом файла (`edges:`, `debt:`), если claim — последний в `claims:`.
 3. `git log -1 --format=%ad --date=short -L <start>,<end>:STATUS.yaml` — дата последнего РЕАЛЬНОГО изменения именно этого диапазона строк.
 4. Нет вывода (файл не закоммичен / блок только что появился в рабочем дереве, не в истории) → **skip**, не WARN, не FAIL.
-5. Дата старше `meta.stale_after_days` (по умолчанию 30) → **WARN** `live_state note last touched <date>, recheck it`. Никогда FAIL — нудж перепроверить командой из `command`, не поломанный контракт.
+5. Дата старше `meta.stale_after_days` (по умолчанию 30) → **WARN** `live_state block last touched <date> (stale since <date>, limit <N>d)` — только абсолютные даты, текст не меняется день ото дня. Никогда FAIL — нудж перепроверить командой из `command`, не поломанный контракт.
 
 Только `full` (git log -L — тяжёлая операция, не для каждого Stop).
 
