@@ -17,7 +17,7 @@ PIPELINE_ROOT = Path(__file__).resolve().parent
 STAGES_DIR = PIPELINE_ROOT / "stages"
 
 # Run-phase order for --list sorting (dots dropped, so I.3.5 is "i35").
-PHASE_ORDER = ["i1", "i2", "i35", "i4", "i5", "i6", "i9", "i10"]
+PHASE_ORDER = ["i1", "i2", "i35", "i4", "i5", "i6", "i9", "i10", "i11"]
 
 _PHASE_PREFIX_RE = re.compile(r"^(i\d+)_")
 

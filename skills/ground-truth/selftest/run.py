@@ -3228,6 +3228,17 @@ def sharded_layout_scenarios() -> bool:
         == [f'+  last_audited_commit: "{legacy_sha}"'],
         meta_diff,
     )
+
+    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
+    import i9_install
+
+    with added_file(sharded / "services" / "alpha" / "page.html", "<p></p>\n"):
+        fact = i9_install._coverage_other_extensions(sharded)
+    ok &= record(
+        "layout: i9 --facts reads meta.coverage from the sharded contract",
+        fact == "1 files under roots have extensions outside meta.coverage.extensions (top: .html×1)",
+        str(fact),
+    )
     return ok
 
 
@@ -3253,17 +3264,6 @@ def sharded_guard_scenarios() -> bool:
     def edit_guard(rel: str) -> subprocess.CompletedProcess:
         payload = {"tool_name": "Write", "tool_input": {"file_path": str(repo / rel)}, "cwd": str(repo),
                    "session_id": "s1"}
-
-    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
-    import i9_install
-
-    with added_file(sharded / "services" / "alpha" / "page.html", "<p></p>\n"):
-        fact = i9_install._coverage_other_extensions(sharded)
-    ok &= record(
-        "layout: i9 --facts reads meta.coverage from the sharded contract",
-        fact == "1 files under roots have extensions outside meta.coverage.extensions (top: .html×1)",
-        str(fact),
-    )
         return subprocess.run([sys.executable, str(TEMPLATES / "gt_edit_guard.py")], input=json.dumps(payload),
                               capture_output=True, text=True, timeout=60)
 
@@ -3603,6 +3603,45 @@ def gt_cli_scenario() -> bool:
     )
 
 
+def i11_shard_scenario() -> bool:
+    """I.11 shards a new install; --legacy-layout keeps STATUS.yaml; a probe naming STATUS.yaml fails the stage."""
+    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
+    import i9_install
+
+    def stage(name: str, *flags: str, probe: str | None = None) -> tuple[Path, subprocess.CompletedProcess]:
+        repo = SCRATCH_BASE / f"i11-{name}"
+        shutil.copytree(FIXTURE, repo, symlinks=True)
+        for tool in i9_install.TOOLS_FILES:
+            shutil.copy(TEMPLATES / tool, repo / "tools" / "ground_truth" / tool)
+        if probe:
+            (repo / "tools" / "ground_truth" / "probes" / "reads_status.py").write_text(probe)
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+        (SCRATCH_BASE / f"i11-{name}-research").mkdir()
+        run_json = SCRATCH_BASE / f"i11-{name}-run.json"
+        run_json.write_text(json.dumps({
+            "repo": str(repo), "research": str(SCRATCH_BASE / f"i11-{name}-research"),
+            "scratch": str(SCRATCH_BASE / f"i11-{name}-scratch"), "python": sys.executable,
+            "skill": str(SKILL_ROOT), "date": TODAY,
+        }))
+        return repo, run(["pipeline/gt.py", "i11_shard", "--run", str(run_json), *flags], SKILL_ROOT)
+
+    new, cp_new = stage("new")
+    legacy, cp_legacy = stage("legacy", "--legacy-layout")
+    probed, cp_probe = stage("probe", probe='print(open("STATUS.yaml").read())\n')
+    return record(
+        "I.11: a new install ends sharded; --legacy-layout keeps STATUS.yaml; a probe that reads "
+        "STATUS.yaml -> rc 3, STATUS.yaml kept, stage names --legacy-layout",
+        cp_new.returncode == 0 and (new / ".ground-truth" / "contract.yaml").is_file()
+        and not (new / "STATUS.yaml").exists()
+        and cp_legacy.returncode == 0 and (legacy / "STATUS.yaml").is_file()
+        and not (legacy / ".ground-truth" / "contract.yaml").exists()
+        and cp_probe.returncode == 3 and (probed / "STATUS.yaml").is_file()
+        and "FAIL shard: gt migrate --write exited 3" in cp_probe.stderr and "--legacy-layout" in cp_probe.stderr,
+        f"new={out(cp_new)[-400:]} legacy={out(cp_legacy)} probe={out(cp_probe)[-400:]}",
+    )
+
+
 def main() -> int:
     build_fixture()
     ok = True
@@ -3612,6 +3651,7 @@ def main() -> int:
     ok &= sharded_guard_scenarios()
     ok &= migrate_scenarios()
     ok &= gt_cli_scenario()
+    ok &= i11_shard_scenario()
     ok &= fault_scenarios()
     ok &= banned_words_exclude_scenarios()
     ok &= step4_scenarios()
