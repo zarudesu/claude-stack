@@ -1656,6 +1656,38 @@ def check_debt_resolve(root: Path, data: dict, mode: str) -> list[Issue]:
         return [Issue(severity, "-", f"could not read baseline {gt_store.contract_name(root)}: {exc}")]
 
 
+def check_removed_entries(root: Path, data: dict, mode: str) -> list[Issue]:
+    """Entries the baseline contract had and this one does not. Open debt
+    that disappears is a FAIL in both modes: it is closed with state:
+    resolved and proof, never deleted. A claim that disappears is a WARN
+    unless .ground-truth/pending-log.yaml lists it under `removed`, which
+    gt batch writes when an unused:<id> entry is resolved by removal.
+    No baseline, or one that does not parse, is left to the checks that
+    already report it."""
+    try:
+        toplevel = _git_toplevel(root)
+        base, label, _ = _baseline_ref(toplevel, root, mode)
+        baseline = gt_store.load_at(toplevel, root, base) if base else None
+    except (GitUnavailable, ContractError):
+        return []
+    if baseline is None:
+        return []
+    debt = {d.get("id") for d in data.get("debt") or [] if isinstance(d, dict)}
+    claims = {c.get("id") for c in data.get("claims") or [] if isinstance(c, dict)}
+    log = root / gt_store.DIR / "pending-log.yaml"
+    removed = {cid for block in (yaml.safe_load(log.read_text()) or [] if log.is_file() else [])
+               for cid in block.get("removed") or []}
+    issues = [Issue("fail", d["id"], f"open debt {d['id']} removed since {label}; fix: keep it and close it "
+                    "with state: resolved and proof")
+              for d in baseline.data.get("debt") or []
+              if isinstance(d, dict) and d.get("state") == "open" and isinstance(d.get("id"), str) and d["id"] not in debt]
+    issues += [Issue("warn", c["id"], f"claim {c['id']} removed since {label} without a batch verdict; fix: let "
+                     f"gt batch review unused:{c['id']} or say why in the commit")
+               for c in baseline.data.get("claims") or []
+               if isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"] not in claims | removed]
+    return issues
+
+
 def check_canary_roots(root: Path, data: dict, mode: str) -> list[Issue]:
     """One mutation canary per coverage root, not one per repository.
 
@@ -2500,6 +2532,7 @@ def run(root: Path, mode: str, execute: bool = True) -> list[Issue]:
     issues += check_assertion_density(root, data, mode)
     issues += check_debt_coverage(root, data)
     issues += check_debt_resolve(root, data, mode)
+    issues += check_removed_entries(root, data, mode)
     issues += check_canary_roots(root, data, mode)
     issues += check_audit_due(root, data, mode)
     issues += check_status_raise(root, data, mode, execute)

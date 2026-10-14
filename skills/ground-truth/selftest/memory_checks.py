@@ -1152,6 +1152,48 @@ class BatchReviewChecks(unittest.TestCase):
         self.assertEqual((self.log()[-1]["removed"], self.unused()), (["wide"], {}))
 
 
+class RemovedEntryChecks(unittest.TestCase):
+    """contract_lib.check_removed_entries in both modes, through contract_lib.run."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="gt-removed-test-")
+        self.repo = Path(self.temp.name)
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        self.write(["a", "b"], [{"id": "D1", "ref": "a", "state": "open"},
+                                {"id": "D2", "ref": "b", "state": "resolved"}])
+        self.commit()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write(self, claims, debt):
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump({"meta": {"enforcement": "blocking"},
+                                                               "claims": [{"id": c} for c in claims], "debt": debt}))
+
+    def commit(self):
+        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "x"], check=True)
+
+    def removed(self, mode):
+        import contract_lib
+        with mock.patch.dict(os.environ, {"GT_BASE_REF": ""}):
+            return sorted((i.severity, i.claim_id) for i in contract_lib.run(self.repo, mode, execute=False)
+                          if " removed since " in i.message)
+
+    def test_open_debt_fails_and_a_claim_without_verdict_warns(self):
+        self.write(["a"], [])
+        expected = [("fail", "D1"), ("warn", "b")]
+        self.assertEqual(self.removed("sync"), expected)
+        self.commit()
+        self.assertEqual(self.removed("full"), expected)
+        (self.repo / ".ground-truth").mkdir()
+        (self.repo / ".ground-truth/pending-log.yaml").write_text(
+            yaml.safe_dump([{"date": "2026-04-20", "removed": ["b"]}]))
+        self.assertEqual(self.removed("full"), [("fail", "D1")])
+        self.assertEqual(self.removed("sync"), [])  # HEAD is the contract itself now
+
+
 
 class PacketChecks(unittest.TestCase):
     """gt context on a sharded contract with 200 claims in one area and a model.yaml receipt."""
