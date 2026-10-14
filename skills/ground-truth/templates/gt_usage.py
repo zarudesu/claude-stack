@@ -77,13 +77,15 @@ def committed(root):
     return data if isinstance(data, dict) else {}
 
 
-def fold(root, keep):
-    """Merge the local record and this month for the `keep` ids into usage.yaml; returns what it holds."""
+def fold(root, keep, current):
+    """Merge the local record and this month for the `keep` ids into usage.yaml, keeping
+    only the ids in `current` (the contract's claims); returns what it holds."""
     local, old = _local(root), committed(root)
     month = gt_pending._today().isoformat()[:7]
     claims = {str(k): str(v) for k, v in (old.get("claims") or {}).items()}
     for cid, day in [*(local.get("last") or {}).items(), *((cid, month) for cid in keep)]:
         claims[cid] = max(claims.get(cid, ""), day[:7])
+    claims = {cid: last for cid, last in claims.items() if cid in current}
     since = [str(s)[:7] for s in (old.get("since"), local.get("since")) if s]
     if not (since or claims):
         return old

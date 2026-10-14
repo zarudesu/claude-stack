@@ -382,8 +382,10 @@ def _unused_problem(cid, item, entry, claims, open_refs):
         target = claims.get(into[len("claim:"):]) if into.startswith("claim:") else None
         if target is None:
             return "Consolidate of an unused claim needs into: claim:<id> of an existing claim"  # gt-allow: verdict name
-        own = _paths(target)
-        if not all(any(p == q or p.startswith(q.rstrip("/") + "/") for q in own) for p in entry.get("paths") or []):
+        own, paths = _paths(target), entry.get("paths") or []
+        if not paths:
+            return f"unused:{cid} has no paths for {into} to cover; use Delete"
+        if not all(any(p == q or p.startswith(q.rstrip("/") + "/") for q in own) for p in paths):
             return f"{into} paths do not cover {', '.join(entry['paths'])}"
     return None
 
@@ -471,7 +473,7 @@ def _batch(root, verdicts_file):
     if removed:
         block["removed"] = sorted(removed)
     import gt_usage  # here, not at the top: gt_usage imports this module
-    usage = gt_usage.fold(root, keep)
+    usage = gt_usage.fold(root, keep, claims)
     room = max(0, min(gt_usage.PER_BATCH, limits["total"] - len(entries)))
     new = [(last, cid) for last, cid in gt_usage.unused(root, contract.data, usage) if f"unused:{cid}" not in entries][:room]
     areas = model_areas(root) if new else []

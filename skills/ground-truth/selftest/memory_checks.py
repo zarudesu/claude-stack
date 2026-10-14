@@ -1152,6 +1152,25 @@ class BatchReviewChecks(unittest.TestCase):
         self.assertEqual((self.log()[-1]["removed"], self.unused()), (["wide"], {}))
 
 
+    def test_usage_keeps_only_current_claims(self):
+        claims = [{"id": "kept", "path": "src/k.py"}]
+        (self.repo / ".ground-truth").mkdir(exist_ok=True)
+        (self.repo / ".ground-truth/usage.yaml").write_text("since: 2026-01\nclaims:\n  gone: 2026-02\n  kept: 2026-02\n")
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump({"meta": {}, "claims": claims}))
+        (self.repo / ".git/ground-truth-usage.json").write_text(
+            '{"since": "2026-01-01", "last": {"old": "2026-03-01", "kept": "2026-03-01"}}')
+        self.assertEqual(self.batch_on("2026-03-02", [])[0], 0)
+        self.assertEqual((self.repo / ".ground-truth/usage.yaml").read_text(), "since: 2026-01\nclaims:\n  kept: 2026-03\n")
+
+    def test_unused_claim_without_paths_cannot_be_consolidated(self):
+        self.ttl([{"id": "bare"}, {"id": "wide", "path": "src"}])
+        self.assertIn("unused:bare", self.unused())
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump({"meta": {}, "claims": [{"id": "wide", "path": "src"}]}))
+        rc, err = self.batch_on("2026-04-02", [{"key": "unused:bare", "verdict": "Consolidate", "into": "claim:wide",
+                                                "evidence": "wide covers it"}])
+        self.assertEqual(rc, 1, err)
+        self.assertIn("unused:bare has no paths for claim:wide to cover; use Delete", err)
+
 class RemovedEntryChecks(unittest.TestCase):
     """contract_lib.check_removed_entries in both modes, through contract_lib.run."""
 
