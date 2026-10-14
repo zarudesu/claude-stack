@@ -57,14 +57,26 @@ SessionStart дописывает к строке очереди `; batch review
 ```
 
 ```bash
-python3 tools/ground_truth/gt_pending.py --root . batch --verdicts verdicts.yaml
+python3 tools/ground_truth/gt.py batch --verdicts verdicts.yaml   # = gt_pending.py --root . batch
 ```
 
    Применение атомарно: неизвестный key, дубль key, вердикт вне списка, пустой
    evidence, Consolidate без `into`, Replace без claim id, `noise` не у Delete —
    rc 1, очередь и лог не тронуты. Записи без вердикта получают
    `batches_survived += 1`.
-4. Закоммитить очередь, `pending-log.yaml` и правки контракта одним MR. Файл
+
+   Запись `unused:<id>` (claim, не читанный `meta.ttl.unused_days` дней,
+   schema.md §15) принимает только Keep, Delete или Consolidate с
+   `into: claim:<id>` существующего claim'а, чьи пути покрывают пути
+   удаляемого. Keep записывает этот месяц как использование. Delete и
+   Consolidate требуют, чтобы claim уже был удалён из контракта и на него
+   не ссылался open-долг; надгробия нет, id попадает в `removed` блока лога,
+   и verify не предупреждает об удалении.
+
+   После вердиктов batch сворачивает локальный учёт чтений в
+   `.ground-truth/usage.yaml` и ставит в очередь до 5 новых `unused:<id>`
+   (не больше свободного места до `total`).
+4. Закоммитить очередь, `pending-log.yaml`, `usage.yaml` и правки контракта одним MR. Файл
    вердиктов не коммитится.
 
 ## Метрики и тревоги
@@ -85,6 +97,7 @@ python3 tools/ground_truth/gt_pending.py --root . batch --verdicts verdicts.yaml
   age: {median: 3, max: 3}             # дни с first_seen, очередь после прогона
   auto_repaired: 2                     # ссылок, починенных Stop-хуком с прошлого прогона
   reopened: 0                          # снятых вердиктом и вернувшихся с прошлого прогона
+  removed: [old_claim]                 # только если были: claim'ы, снятые вердиктом по unused:<id>
 ```
 
 Приток — ключи очереди, которых не было в снапшоте прошлого блока; отток —

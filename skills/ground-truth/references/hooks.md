@@ -88,7 +88,11 @@ Clean committed дрейф и правки sibling при чистом дере�
    `ground-truth: auto-repaired N line refs in STATUS.yaml` и прибавляет N к
    `<git dir>/ground-truth-auto-repaired` (`gt_pending.py repaired N`, под
    lock очереди; мусор в файле считается 0). Повторный запуск ничего не сдвигает.
-1. verify --mode=sync — согласованность контракта.
+   На sharded раскладке аргумент `STATUS.yaml` прогоняется по каждому файлу
+   `.ground-truth/` (`contract.yaml`, `areas/*.yaml`, `debt.yaml`).
+1. verify --mode=sync — согласованность контракта. Затем `gt_usage.py
+   touch-session` отмечает прочитанными claim'ы, чей путь сессия меняла
+   (локальный учёт, schema.md §15).
 2. gt_session_guard --mode hook — проверки затронутых implemented/partial,
    описание мутации новых/повышенных claims. Саму мутацию хук не применяет:
    WARN явно оставляет доказательство для CI/изолированной приёмки.
@@ -118,6 +122,7 @@ Stop блокирует только серьёзное. Обслуживани�
 | удалённая область, ошибка репозитория, нет модели, сломанное окружение | серьёзное, блок | gt_context.py, sync-check.sh |
 | missing-path, uncovered, cited-line, no-assertions, open-debt, no-canary (WARN verify) | отложенное | gt_pending.STATUS_CLASSES |
 | stale-area, unclassified (память) | отложенное | gt_pending.MEMORY_CLASSES |
+| unused:<id> — claim без чтения `meta.ttl.unused_days` (90) дней; ставит только `gt batch`, не хук | отложенное | gt_usage.py, gt_pending.py batch |
 | бюджет guard, audit due, советы по диффу, сдвиг строк remap, прочие WARN | печать, не в очереди | — |
 
 Повтор без новых находок файл не меняет: набор сессий, видевших запись, —

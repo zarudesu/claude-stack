@@ -79,6 +79,22 @@ Hash-check подтверждает совпадение с рассмотрен
 
 ## CLI
 
+Пакет claim'ов на задачу — `gt context`; работает и без модели, на любой раскладке:
+
+```sh
+python3 tools/ground_truth/gt.py context --path services/billing.py   # или --area billing
+python3 tools/ground_truth/gt.py show billing-refund                  # claim, area:<id> или путь
+```
+
+Не больше 15 указателей (`--limit 15`, `--all` снимает лимит). Порядок: 4·точный
+путь + 3·префикс пути + 2·canary + 1·implemented, затем id — вывод байт-стабилен.
+Перед выдачей у claim'а проверяются пути, цитаты file:line и свежесть receipt его
+области; не прошедший идёт в блок «drifted, do not trust» (до 5), не в факты.
+Скрытое сверх лимита — строкой `+N more: gt context --area X --all`. Тела
+документов не печатаются. Единственная запись — локальный учёт использования
+(`gt_usage.py`, см. [schema.md](schema.md) §15, `usage.yaml`). Без модели область claim'а —
+файл `areas/<id>.yaml` или область, которой принадлежит первый путь.
+
 Запускать из рабочего repo: helper ищет model у предков или по workspace pointer.
 --root ROOT ставится перед подкомандой; можно явно выбрать общий корень.
 

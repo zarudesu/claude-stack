@@ -28,8 +28,9 @@ SKILL.md или первой сессии само по себе не являе
   Прочитать [первичную подготовку](references/init.md),
   [модель памяти](references/project-memory.md) и
   [организацию знаний](references/doc-model-bridge.md).
-- `context`: подготовленная модель есть, начинается задача или передача PM.
-  Выполнить установленный `gt_context.py list`, выбрать области, затем
+- `context`: начинается задача или передача PM. `gt context --path <файлы задачи>`
+  (или `--area ID`) даёт до 15 claim'ов; блоку «drifted, do not trust» не верить.
+  С моделью — `gt_context.py list`, выбрать области, затем
   `gt_context.py context --area ID`. При stale/неполном пакете — адресный sync.
   Прочитать [сопровождение и handoff](references/process.md).
 - `sync`: после изменения кода, документации, требований, конфигурации или связей.
@@ -70,11 +71,19 @@ SKILL.md или первой сессии само по себе не являе
 
 ## Доказательства и инструменты
 
-STATUS.yaml остаётся локальным индексом исполняемых утверждений, не заменой
-модели проекта. Читать [схему](references/schema.md) при изменении claims.
+Контракт исполняемых утверждений лежит в `STATUS.yaml` (legacy) или в
+`.ground-truth/` (sharded: `contract.yaml`, `areas/<id>.yaml`, `debt.yaml`);
+обе раскладки сразу — ошибка контракта, exit 3. Это локальный индекс, не замена
+модели проекта. Новый init переносит его в `.ground-truth/` шагом I.11
+(`gt migrate --write`); `--legacy-layout` оставляет `STATUS.yaml`.
+Читать [схему](references/schema.md) при изменении claims.
 Новые/повышенные implemented/partial требуют baseline green → meaningful
 mutation red → restored green в изоляции. Skip/отсутствие toolchain — не proof.
 `verify.py --mode=sync` не означает исполнения всех поведенческих тестов.
+
+Команды в репозитории — `python3 tools/ground_truth/gt.py <команда>`: `context`,
+`show`, `sync`, `audit`, `doctor`, `batch`, `pending`, `remap`, `refresh`, `blast`,
+`mutate`, `migrate`; что делает каждая — `gt.py` без аргументов.
 
 [Установка](references/install.md) и [хуки/CI](references/hooks.md) нужны при init
 и обновлении механизмов. Установщик не создаёт готовое знание: модель и документы
