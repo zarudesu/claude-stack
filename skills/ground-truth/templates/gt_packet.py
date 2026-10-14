@@ -11,9 +11,10 @@ A claim failing either is listed under "drifted, do not trust", never as a
 fact. A stale review receipt (model.yaml) marks its area line
 "[receipt stale]" and leaves the area's claims alone. A path whose bytes
 differ from the last green verify --mode=sync is marked "changed since
-last green verify". Document bodies are not
-printed, only their paths. The only write is the local usage record
-(gt_usage.py) of the claims shown as facts, or printed by gt show.
+last green verify". Document bodies are not printed, only their paths.
+Without --all the text stops at 150 lines, the last one naming the command
+for the rest. The only write is the local usage record (gt_usage.py) of the
+claims shown as facts, or printed by gt show.
 """
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ except ImportError:
 
 DIGESTS = "ground-truth-digests.json"
 MAX_DRIFTED = 5
+MAX_LINES = 150
 SUMMARY_CHARS = 120
 
 
@@ -216,7 +218,12 @@ def main(argv: list[str]) -> int:
     except (gt_store.ContractError, ValueError, OSError, yaml.YAMLError) as exc:
         print(f"gt context: {exc}", file=sys.stderr)
         return 3
-    print(json.dumps(packet, ensure_ascii=False, indent=1) if args.json else render(packet), end="\n" if args.json else "")
+    text = render(packet)
+    lines = text.splitlines()
+    if not args.all and len(lines) > MAX_LINES:
+        query = f"--area {args.area}" if args.area is not None else "--path " + " ".join(packet["query"]["paths"])
+        text = "\n".join(lines[:MAX_LINES - 1] + [f"+{len(lines) - MAX_LINES + 1} lines: gt context {query} --all"]) + "\n"
+    print(json.dumps(packet, ensure_ascii=False, indent=1) if args.json else text, end="\n" if args.json else "")
     gt_usage.touch_or_warn("gt context", _root(args.root),
                            [fact["id"] for area in packet["areas"] for fact in area["facts"]])
     return 0

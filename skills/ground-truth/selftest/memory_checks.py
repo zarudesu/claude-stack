@@ -1268,6 +1268,12 @@ class PacketChecks(unittest.TestCase):
         self.assertNotIn("more:", everything)
         self.assertEqual(len(everything.splitlines()), 202 + 5)
 
+    def test_packet_over_150_lines_is_cut_with_the_full_command(self):
+        lines = self.context("--area", "big", "--limit", "200").splitlines()
+        self.assertEqual(len(lines), 150)
+        self.assertRegex(lines[-1], r"^\+\d+ lines: gt context --area big --all$")
+        self.assertGreater(len(self.context("--area", "big", "--limit", "200", "--all").splitlines()), 150)
+
     def test_drifted_claims_are_never_facts(self):
         packet = json.loads(self.context("--area", "big", "--json"))
         facts = [f["id"] for a in packet["areas"] for f in a["facts"]]
