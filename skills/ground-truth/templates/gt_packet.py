@@ -6,11 +6,12 @@ Usage: python3 tools/ground_truth/gt.py context (--path P... | --area A) [--limi
 
 Claims rank by 4*exact path + 3*path prefix + 2*canary + 1*implemented, then
 id, so one checkout prints the same bytes every time. Before a claim is
-shown its paths must exist, its quoted file:line citations must hold and
-its area's review receipt (model.yaml), if it has one, must be fresh. A
-claim failing any of these is listed under "drifted, do not trust", never
-as a fact. A path whose bytes differ from the last green verify --mode=sync
-is marked "changed since last green verify". Document bodies are not
+shown its paths must exist and its quoted file:line citations must hold.
+A claim failing either is listed under "drifted, do not trust", never as a
+fact. A stale review receipt (model.yaml) marks its area line
+"[receipt stale]" and leaves the area's claims alone. A path whose bytes
+differ from the last green verify --mode=sync is marked "changed since
+last green verify". Document bodies are not
 printed, only their paths. The only write is the local usage record
 (gt_usage.py) of the claims shown as facts, or printed by gt show.
 """
@@ -87,14 +88,12 @@ def _claims(root: Path, contract) -> dict:
     return claims
 
 
-def _drift(root: Path, claim: dict, paths: list[str], receipt: str | None) -> str | None:
+def _drift(root: Path, claim: dict, paths: list[str]) -> str | None:
     for rel in paths:
         if not (root / rel).exists():
             return f"{rel} missing"
     problems = contract_lib.cited_line_problems(root, claim)
-    if problems:
-        return problems[0]
-    return "area receipt stale" if receipt == "stale" else None
+    return problems[0] if problems else None
 
 
 def build(root: Path, paths: list[str] | None, area: str | None, limit: int, everything: bool) -> dict:
@@ -126,8 +125,8 @@ def build(root: Path, paths: list[str] | None, area: str | None, limit: int, eve
     ranked = sorted((cid for cid, (_, w, _) in claims.items() if w in selected), key=lambda c: (-score(c), c))
     drifted, facts = [], []
     for cid in ranked:
-        claim, where, own = claims[cid]
-        reason = _drift(root, claim, own, receipts.get(where))
+        claim, _, own = claims[cid]
+        reason = _drift(root, claim, own)
         (drifted if reason else facts).append((cid, reason))
     if not everything:
         drifted = drifted[:min(MAX_DRIFTED, limit)]

@@ -1281,9 +1281,12 @@ class PacketChecks(unittest.TestCase):
         self.assertEqual(packet["areas"][0]["facts"][0]["id"], "c004")  # exact path first
         (self.repo / "src/small/a.py").write_text("A = 2\n")
         packet = json.loads(self.context("--path", "src/big/f004.py", "src/small/a.py", "--json"))
-        self.assertIn({"id": "small_a", "area": "small", "reason": "area receipt stale"}, packet["drifted"])
-        self.assertIn({"id": "c004", "area": "big", "reason": "area receipt stale"}, packet["drifted"])  # big depends on small
-        self.assertEqual([f for a in packet["areas"] for f in a["facts"]], [])
+        # A stale receipt flags the area (big depends on small); claims whose own paths and quotes hold stay facts.
+        self.assertEqual({a["id"]: a["receipt"] for a in packet["areas"]}, {"big": "stale", "small": "stale"})
+        self.assertNotIn("area receipt stale", [d["reason"] for d in packet["drifted"]])
+        facts = [f["id"] for a in packet["areas"] for f in a["facts"]]
+        self.assertIn("c004", facts)
+        self.assertIn("small_a", facts)
 
     def test_same_checkout_same_bytes_and_json_has_the_same_content(self):
         first = self.context("--path", "src/big/f010.py")
