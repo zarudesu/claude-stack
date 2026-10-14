@@ -81,7 +81,8 @@ def main(argv: list[str]) -> int:
 
     run = load_run(args.run)
     if not gt_store.contract_files(run.repo):
-        print(f"error: STATUS.yaml not found at {run.repo / 'STATUS.yaml'}; run ground-truth init first", file=sys.stderr)
+        name = gt_store.contract_name(run.repo)
+        print(f"error: {name} not found at {run.repo / name}; run ground-truth init first", file=sys.stderr)
         return 1
     data = gt_store.load(run.repo).data
     meta = data.get("meta", {})
