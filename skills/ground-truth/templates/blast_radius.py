@@ -9,7 +9,8 @@ Usage:
 
 Exit 0 in all normal cases (including "orphan path, no claim covers it" --
 that is itself a useful answer). Exit 1 only when the argument is neither
-an existing path under root nor a known claim id.
+an existing path under root nor a known claim id. Exit 3 when STATUS.yaml
+and .ground-truth/contract.yaml both exist.
 """
 from __future__ import annotations
 
@@ -399,13 +400,17 @@ def print_claim_links(data: dict, claim: dict, name: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("target", help="a path (relative to --root) or a STATUS.yaml claim id")
+    ap.add_argument("target", help="a path (relative to --root) or a claim id from STATUS.yaml or .ground-truth/")
     ap.add_argument("--root", default=None)
     args = ap.parse_args()
 
     root = Path(args.root).resolve() if args.root else find_root(Path(__file__).parent)
+    try:
+        name = gt_store.contract_name(root)
+    except gt_store.ContractError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
     data = load_status(root)
-    name = gt_store.contract_name(root)
 
     claim = find_claim_by_id(data, args.target)
     target_path: Path | None = None

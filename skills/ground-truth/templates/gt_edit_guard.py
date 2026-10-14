@@ -29,9 +29,9 @@ since it only ever gates a command that never needed it.
 
 Everything on the path from stdin to a verdict has to stay cheap: the hook
 fires before every single edit. The parsed shape of the contract is cached
-next to the repository's git metadata, keyed by the newest mtime and the
-total size of its files, so the yaml parser is imported only when the
-contract itself changed.
+next to the repository's git metadata, keyed by the newest mtime, the
+total size and the number of its files, so the yaml parser is imported
+only when the contract itself changed.
 """
 from __future__ import annotations
 
@@ -156,10 +156,11 @@ def _locate(dirpath) -> tuple[Path | None, Path | None]:
     return Path(lines[0].strip()), git_dir
 
 
-def _stamp(root: Path) -> tuple[int, int]:
-    """(newest mtime, total size) over the contract files: the cache key."""
+def _stamp(root: Path) -> tuple[int, int, int]:
+    """(newest mtime, total size, file count) over the contract files: the
+    cache key. The count catches a deleted shard the other two may miss."""
     stats = [(root / rel).stat() for rel in gt_store.contract_files(root)]
-    return max(st.st_mtime_ns for st in stats), sum(st.st_size for st in stats)
+    return max(st.st_mtime_ns for st in stats), sum(st.st_size for st in stats), len(stats)
 
 
 def _read_cache(cache_path: Path, st) -> dict | None:
@@ -169,7 +170,7 @@ def _read_cache(cache_path: Path, st) -> dict | None:
         return None
     if not isinstance(cfg, dict):
         return None
-    if [cfg.get("mtime_ns"), cfg.get("size")] != list(st):
+    if [cfg.get("mtime_ns"), cfg.get("size"), cfg.get("files")] != list(st):
         return None
     return cfg
 
@@ -197,6 +198,7 @@ def _build_cache(root: Path, st) -> dict:
     return {
         "mtime_ns": st[0],
         "size": st[1],
+        "files": st[2],
         "roots": [r for r in coverage.get("roots") or [] if isinstance(r, str)],
         "exclude": [e for e in coverage.get("exclude") or [] if isinstance(e, str)],
         "enforcement": meta.get("enforcement", "advisory"),
@@ -480,6 +482,10 @@ def run() -> int:
 def main() -> int:
     try:
         return run()
+    except gt_store.MixedLayoutError as exc:
+        # Both layouts on disk: which contract covers the file is unknown.
+        print(f"ground-truth: {exc}", file=sys.stderr)
+        return 2
     except Exception:
         # Fail open, and silently: this hook runs before every edit, and a
         # bug in it must never be the reason an edit cannot be made.

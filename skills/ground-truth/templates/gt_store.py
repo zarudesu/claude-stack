@@ -38,6 +38,10 @@ class ContractError(Exception):
     """The contract is missing, does not parse, or both layouts are present."""
 
 
+class MixedLayoutError(ContractError):
+    """STATUS.yaml and .ground-truth/contract.yaml both exist."""
+
+
 @dataclass
 class Contract:
     data: dict
@@ -58,7 +62,7 @@ def find_root(start: Path) -> Path | None:
 def _files(exists, areas: list[str]) -> list[str]:
     legacy, sharded = exists(STATUS), exists(META)
     if legacy and sharded:
-        raise ContractError(
+        raise MixedLayoutError(
             f"both {STATUS} and {META} exist; run `git checkout` or finish `gt migrate`"
         )
     if legacy:

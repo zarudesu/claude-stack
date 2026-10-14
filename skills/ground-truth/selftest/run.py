@@ -3265,6 +3265,32 @@ def sharded_guard_scenarios() -> bool:
     cp = edit_guard("services/gamma_mod.py")
     ok &= record("sharded: edit guard cache follows a shard edit (the new claim is seen)",
                  cp.returncode == 2 and "covered by claim(s) gamma_mod" in cp.stderr, cp.stderr)
+
+    # A deleted shard whose bytes reappear in another under the same newest
+    # mtime still changes the edit guard's cache key.
+    import gt_edit_guard
+    import gt_store
+    extra = services.with_name("extra.yaml")
+    extra.write_text("area: extra\nclaims: []\n")
+    kept = services.read_text()
+
+    def stamp() -> tuple:
+        for rel in gt_store.contract_files(repo):
+            os.utime(repo / rel, ns=(10**18, 10**18))
+        return gt_edit_guard._stamp(repo)
+
+    before = stamp()
+    services.write_text(kept + "#" * (extra.stat().st_size - 1) + "\n")
+    extra.unlink()
+    after = stamp()
+    services.write_text(kept)
+    ok &= record("sharded: edit guard cache key counts the contract files (a deleted shard misses the cache)",
+                 before[:2] == after[:2] and before != after, f"{before} {after}")
+
+    with added_file(repo / "STATUS.yaml", "schema_version: 1\nclaims: []\n"):
+        cp = run([str(TEMPLATES / "blast_radius.py"), "services/gamma_mod.py", "--root", str(repo)], repo)
+    ok &= record("sharded: blast_radius with STATUS.yaml next to contract.yaml -> exit 3, no traceback",
+                 cp.returncode == 3 and "finish `gt migrate`" in cp.stderr and "Traceback" not in out(cp), out(cp))
     return ok
 
 
