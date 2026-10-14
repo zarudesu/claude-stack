@@ -20,9 +20,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "templates"))
+import gt_store  # noqa: E402
 from gt_lib.git import _run  # noqa: E402
 from gt_lib.paths import load_run, stage_dir  # noqa: E402
 from stages.i9_install import drift_report, gather_facts  # noqa: E402
@@ -73,7 +73,6 @@ def verify(run, mode: str = "full") -> dict:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True, help="path to run.json")
-    parser.add_argument("--status", help="path to STATUS.yaml (default: run.repo/STATUS.yaml)")
     parser.add_argument("--max-age-days", type=int, default=30)
     parser.add_argument("--sample", type=int, default=5, help="untouched claims to re-verify in scoped mode")
     parser.add_argument("--seed", type=int, default=None)
@@ -81,14 +80,12 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     run = load_run(args.run)
-    status_path = Path(args.status) if args.status else run.repo / "STATUS.yaml"
-    if not status_path.is_file():
-        print(f"error: STATUS.yaml not found at {status_path}; run ground-truth init first", file=sys.stderr)
+    if not gt_store.contract_files(run.repo):
+        print(f"error: STATUS.yaml not found at {run.repo / 'STATUS.yaml'}; run ground-truth init first", file=sys.stderr)
         return 1
-    data = yaml.safe_load(status_path.read_text(encoding="utf-8")) or {}
+    data = gt_store.load(run.repo).data
     meta = data.get("meta", {})
     roots = [r.rstrip("/") for r in meta.get("coverage", {}).get("roots", [])]
-    rel_status = str(status_path.resolve().relative_to(run.repo.resolve()))
 
     base, base_reason = audit_base(run.repo, meta)
     head = _run(run.repo, ["rev-parse", "HEAD"]).strip()
@@ -97,10 +94,10 @@ def main(argv: list[str]) -> int:
 
     claims = data.get("claims", []) or []
     try:
-        previous = yaml.safe_load(_run(run.repo, ["show", f"{base}:{rel_status}"])) if base else {}
-    except (RuntimeError, yaml.YAMLError):
-        previous = {}
-    previous = previous or {}
+        previous = gt_store.load_at(run.repo, run.repo, base) if base else None
+    except gt_store.ContractError:
+        previous = None
+    previous = previous.data if previous else {}
     old_claims = {c["id"]: c for c in previous.get("claims", []) or []}
     changed_claims = [c["id"] for c in claims if old_claims.get(c["id"]) != c]
     removed_claims = sorted(set(old_claims) - {c["id"] for c in claims})

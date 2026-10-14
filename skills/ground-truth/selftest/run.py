@@ -1757,6 +1757,31 @@ def edge_case_scenarios() -> bool:
             and (yaml.safe_load(text).get("meta") or {}).get("last_audited_commit") == head,
             f"rc={cp.returncode} lines={live} out={out(cp)}",
         )
+
+        make_sharded(close_repo)
+        subprocess.run(["git", "add", "-A"], cwd=close_repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "shard"], cwd=close_repo, check=True)
+        sharded_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=close_repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        stage = [str(SKILL_ROOT / "pipeline" / "gt.py"), "--run", str(run_json)]
+        cp_scope = run([stage[0], "audit_scope", *stage[1:], "--skip-verify"], close_repo)
+        scope = json.loads((SCRATCH_BASE / "audit-close-scratch" / "audit" / "audit-scope.json").read_text())
+        close = [stage[0], "audit_close", *stage[1:], "--write", "--force", "--reviewed"]
+        cp_legacy = run([*close, "--status", str(close_repo / "STATUS.yaml")], close_repo)
+        cp_sharded = run(close, close_repo)
+        meta = yaml.safe_load((close_repo / ".ground-truth" / "contract.yaml").read_text())["meta"]
+        ok &= record(
+            "58b: sharded layout -> audit_scope compares with the legacy contract at the audited commit; "
+            "audit_close writes meta into .ground-truth/contract.yaml and refuses --status STATUS.yaml",
+            cp_scope.returncode == 0 and scope["base"] == head and scope["removed_claims"] == []
+            and cp_legacy.returncode == 1
+            and "only the repository .ground-truth/contract.yaml can receive" in out(cp_legacy)
+            and cp_sharded.returncode == 0 and meta["last_audited_commit"] == sharded_head
+            and not (close_repo / "STATUS.yaml").exists(),
+            f"scope={out(cp_scope)} {scope.get('base')} {scope.get('removed_claims')} "
+            f"legacy={out(cp_legacy)} sharded={out(cp_sharded)} meta={meta}",
+        )
     finally:
         shutil.rmtree(close_repo, ignore_errors=True)
         shutil.rmtree(close_research, ignore_errors=True)
