@@ -27,7 +27,7 @@ except ImportError:
 
 MODEL = ".ground-truth/model.yaml"
 RECEIPTS = ".ground-truth/review.json"
-MANAGED = {MODEL, RECEIPTS, RECEIPTS + ".lock", ".ground-truth/workspace", ".ground-truth/pending.yaml"}
+MANAGED = ".ground-truth/"  # model, receipts, queue, log, contract shards: never source drift
 
 
 def digest(value):
@@ -192,7 +192,7 @@ def inspect(root):
                         if not any(c in name for c in "*?[") and local_file(repo, name).is_file():
                             names.add(name)
             # gitlinks/nested repositories must have their own registry entry.
-            names = {n for n in names if not (repo / n).is_dir() and n not in MANAGED}
+            names = {n for n in names if not (repo / n).is_dir() and not n.startswith(MANAGED)}
             watched = {n for n in names if any(matches(n, p) for p in spec.get("watch", ["."]))}
             watched = {n for n in watched if not any(matches(n, e["path"]) for e in spec.get("exclude", []))}
             files[rid] = watched

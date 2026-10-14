@@ -952,6 +952,7 @@ fi
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_remap_repo
 cp "$TEMPLATES_DIR/gt_pending.py" "$REPO/tools/ground_truth/gt_pending.py"  # gt-allow: real install path, not prose
+cp "$TEMPLATES_DIR/gt_store.py" "$REPO/tools/ground_truth/gt_store.py"  # gt-allow: real install path, not prose
 shift_pricing_lines
 out=$(run_stop_hook false 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qx "ground-truth: auto-repaired 1 line refs in STATUS.yaml" \

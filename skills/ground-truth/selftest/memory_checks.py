@@ -142,6 +142,17 @@ class MemoryChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             memory.refresh(self.root, ["backend"], view["revision"], "cannot silently ignore a new input")
 
+    def test_contract_shards_and_queue_log_are_not_source_drift(self):
+        self.accept()
+        shards = self.root / "backend/.ground-truth"
+        (shards / "areas").mkdir(parents=True)
+        for rel, text in (("pending-log.yaml", "[]\n"), ("contract.yaml", "schema_version: 2\n"),
+                          ("areas/backend.yaml", "area: backend\nclaims: []\n")):
+            (shards / rel).write_text(text)
+        view = memory.inspect(self.root)
+        self.assertEqual(view["gaps"]["backend"], [])
+        self.assertTrue(view["areas"]["backend"]["fresh"])
+
     def test_deleted_source_is_not_silent_success(self):
         self.accept()
         (self.root / "backend/src/core.py").unlink()
@@ -347,6 +358,7 @@ class MemoryChecks(unittest.TestCase):
         dest.mkdir(parents=True)
         shutil.copyfile(SKILL / "templates/gt_context.py", dest / "gt_context.py")
         shutil.copyfile(SKILL / "templates/gt_pending.py", dest / "gt_pending.py")
+        shutil.copyfile(SKILL / "templates/gt_store.py", dest / "gt_store.py")
         self.model["areas"][1]["sources"].append("tools")
         self.model["enforcement"] = "blocking"
         self.write_model()
@@ -379,6 +391,7 @@ class MemoryChecks(unittest.TestCase):
         dest.mkdir(parents=True)
         shutil.copyfile(SKILL / "templates/gt_context.py", dest / "gt_context.py")
         shutil.copyfile(SKILL / "templates/gt_pending.py", dest / "gt_pending.py")
+        shutil.copyfile(SKILL / "templates/gt_store.py", dest / "gt_store.py")
         subprocess.run(["git", "-C", str(bot), "add", "."], check=True)
         subprocess.run(["git", "-C", str(bot), "-c", "user.name=fixture", "-c",
                         "user.email=fixture@example.invalid", "commit", "-qm", "helper"], check=True)
@@ -462,6 +475,7 @@ class PendingQueueChecks(unittest.TestCase):
         tools = self.repo / "tools/ground_truth"
         tools.mkdir(parents=True)
         shutil.copyfile(SKILL / "templates/gt_pending.py", tools / "gt_pending.py")
+        shutil.copyfile(SKILL / "templates/gt_store.py", tools / "gt_store.py")
         (tools / "verify.py").write_text(
             "import os, sys\n"
             "if '--show-warn' in sys.argv:\n"
@@ -950,6 +964,21 @@ class BatchReviewChecks(unittest.TestCase):
             self.assertIn(message, err)
             self.assertEqual(self.queue.read_bytes(), before)
             self.assertFalse((self.repo / gt_pending.LOG).exists())
+
+    def test_replace_accepts_claim_ref_in_both_layouts(self):
+        def replace(evidence):
+            self.seed("uncovered:src/a.py")
+            return self.batch([{"key": "uncovered:src/a.py", "verdict": "Replace", "evidence": evidence}])
+        self.assertEqual(replace("now claim:price_v2")[0], 0)
+        (self.repo / "STATUS.yaml").unlink()
+        shards = self.repo / ".ground-truth"
+        (shards / "areas").mkdir(parents=True)
+        (shards / "contract.yaml").write_text("schema_version: 2\nmeta:\n  enforcement: blocking\nedges: []\n")
+        (shards / "areas/global.yaml").write_text("area: global\nclaims:\n- id: price_v2\n")
+        self.assertEqual(replace("now claim:price_v2")[0], 0)
+        rc, err = replace("STATUS.yaml#gone")
+        self.assertEqual(rc, 1)
+        self.assertIn("existing claim", err)
 
     def test_entries_without_verdict_escalate_after_two_batches(self):
         self.seed("uncovered:src/a.py")

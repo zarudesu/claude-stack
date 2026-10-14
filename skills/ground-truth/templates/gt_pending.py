@@ -52,6 +52,8 @@ import time
 
 import yaml
 
+import gt_store
+
 QUEUE = ".ground-truth/pending.yaml"
 MODEL = ".ground-truth/model.yaml"
 LOG = ".ground-truth/pending-log.yaml"
@@ -95,13 +97,16 @@ def _matches(path, pattern):
 
 
 def model_areas(root):
+    """model.yaml areas, then the contract shards whose sources model.yaml does not have."""
     path = Path(root) / MODEL
     model = yaml.safe_load(path.read_text()) if path.is_file() else None
-    return model.get("areas") or [] if isinstance(model, dict) else []
+    areas = model.get("areas") or [] if isinstance(model, dict) else []
+    known = {a.get("id") for a in areas if isinstance(a, dict)}
+    return areas + [{"id": aid, "sources": src} for aid, src in gt_store.area_index(Path(root)) if aid not in known]
 
 
 def area_of(path, areas):
-    """First model area whose sources/docs own the path, else its top directory, else global."""
+    """First area whose sources/docs own the path, else its top directory, else global."""
     for area in areas:
         if any(_matches(path, p) for p in area.get("sources", []) + area.get("docs", [])):
             return area["id"]
@@ -257,7 +262,7 @@ def record(root, findings, classes, session, unjudged=lambda key: False):
 
 def status_findings(root, lines):
     """Deferred-class findings from verify.py --mode=sync --show-warn output."""
-    status = yaml.safe_load((Path(root) / "STATUS.yaml").read_text()) or {}
+    status = gt_store.load(Path(root)).data
     claim_path = {}
     for claim in status.get("claims") or []:
         path = claim.get("path") if isinstance(claim, dict) else None
@@ -288,21 +293,11 @@ def status_findings(root, lines):
     return findings
 
 
-def _blocking(root):
-    blocking = False
-    for name, get in (("STATUS.yaml", lambda d: (d.get("meta") or {}).get("enforcement")),
-                      (MODEL, lambda d: d.get("enforcement"))):
-        path = Path(root) / name
-        data = yaml.safe_load(path.read_text()) if path.is_file() else None
-        blocking |= isinstance(data, dict) and get(data) == "blocking"
-    return blocking
-
-
 def gate(root, touched=None):
     """One line and 1 when blocking enforcement meets an overflowing/escalated touched area;
     3 under blocking enforcement when the queue can not be read. `touched` defaults to the
     areas of the working tree's changes; "global" never counts as touched."""
-    blocking = _blocking(root)
+    blocking = gt_store.enforcement(Path(root)) == "blocking"
     label = "ground-truth" if blocking else "ground-truth (advisory)"
     try:
         data, limits, entries, _ = load(root, local=True)
@@ -367,7 +362,7 @@ def _verdict_problem(item, entries, given, claims):
         return "evidence is empty or a placeholder"
     if verdict == "Consolidate" and (item.get("into") not in entries or item["into"] == key):  # gt-allow: verdict name
         return "Consolidate needs into: <another queued key>"  # gt-allow: verdict name, not prose
-    if verdict == "Replace" and not set(re.findall(r"STATUS\.yaml#([\w.-]+)", evidence)) & claims:
+    if verdict == "Replace" and not set(gt_store.CLAIM_REF_RE.findall(evidence)) & claims:
         return "Replace evidence must name STATUS.yaml#<id> of an existing claim"
     if item.get("noise") and verdict != "Delete":
         return "noise is only for Delete"
@@ -385,9 +380,8 @@ def _batch(root, verdicts_file):
     items = yaml.safe_load(Path(verdicts_file).read_text()) or []
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise ValueError(f"{verdicts_file} must be a list of mappings")
-    status = Path(root) / "STATUS.yaml"
-    claims = {c.get("id") for c in (yaml.safe_load(status.read_text()) or {}).get("claims") or []
-              if isinstance(c, dict)} if status.is_file() else set()
+    claims = {c.get("id") for c in gt_store.load(Path(root)).data.get("claims") or []
+              if isinstance(c, dict)} if gt_store.contract_files(Path(root)) else set()
     errors, given = [], {}
     for item in items:
         problem = _verdict_problem(item, entries, given, claims)
@@ -521,7 +515,8 @@ def main(argv=None):
             return 0
         summary(args.root)
         return 0
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError,
+            gt_store.ContractError) as exc:
         print(f"ground-truth pending: {exc}", file=sys.stderr)
         return 1
 
