@@ -63,6 +63,14 @@ def touch(root, ids):
         gt_pending._write(path, json.dumps(data, sort_keys=True))
 
 
+def touch_or_warn(prog, root, ids):
+    """touch(), best effort: a failure costs one stderr line, never the caller's output."""
+    try:
+        touch(root, ids)
+    except (OSError, ValueError) as exc:
+        print(f"{prog}: usage not recorded: {exc}", file=sys.stderr)
+
+
 def committed(root):
     path = Path(root) / COMMITTED
     data = yaml.safe_load(path.read_text()) if path.is_file() else None
@@ -134,7 +142,10 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("command", choices=["touch-session"])
     args = parser.parse_args(argv)
-    touch_session(args.root)
+    try:
+        touch_session(args.root)
+    except Exception as exc:  # the Stop hook runs this; a usage record is never worth failing it
+        print(f"gt_usage: usage not recorded: {exc}", file=sys.stderr)
     return 0
 
 

@@ -1339,6 +1339,20 @@ class PacketChecks(unittest.TestCase):
         usage = self.usage()
         self.assertEqual((usage["since"], usage["last"]["small_a"], len(usage["last"])), ("2026-03-01", "2026-03-03", 15))
 
+    def test_unwritable_usage_record_never_costs_the_output(self):
+        import gt_usage
+        (self.repo / ".git" / "ground-truth-usage.json").write_text("{")
+        runs = [(self.packet.main, ["--area", "big"]), (self.packet.show_main, ["quoted"]),
+                (gt_usage.main, ["touch-session"])]
+        (self.repo / "src/small/a.py").write_text("A = 4\n")
+        for entry, args in runs:
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                rc = entry(["--root", str(self.repo), *args])
+            self.assertEqual(rc, 0, err.getvalue())
+            self.assertEqual(len(err.getvalue().splitlines()), 1, err.getvalue())
+            self.assertIn("usage not recorded", err.getvalue())
+            self.assertEqual(bool(out.getvalue()), entry is not gt_usage.main)
+
 
 if __name__ == "__main__":
     unittest.main()

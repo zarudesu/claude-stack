@@ -213,11 +213,12 @@ def main(argv: list[str]) -> int:
     try:
         packet = build(_root(args.root), args.path and [p.removeprefix("./").rstrip("/") for p in args.path],
                        args.area, args.limit, args.all)
-        gt_usage.touch(_root(args.root), [fact["id"] for area in packet["areas"] for fact in area["facts"]])
     except (gt_store.ContractError, ValueError, OSError, yaml.YAMLError) as exc:
         print(f"gt context: {exc}", file=sys.stderr)
         return 3
     print(json.dumps(packet, ensure_ascii=False, indent=1) if args.json else render(packet), end="\n" if args.json else "")
+    gt_usage.touch_or_warn("gt context", _root(args.root),
+                           [fact["id"] for area in packet["areas"] for fact in area["facts"]])
     return 0
 
 
@@ -245,11 +246,11 @@ def show_main(argv: list[str]) -> int:
             and any(p == target or _covers(target, p) for p in contract_lib._claim_path_targets(c))]
         if not ids:
             raise ValueError(f"no claim id or claim path matches {args.target!r}")
-        gt_usage.touch(root, ids)
         for cid in ids:
             rel, first, last = contract.origin[("claim", cid)]
             print(f"# {rel}:{first}-{last}")
             print("\n".join((root / rel).read_text().splitlines()[first - 1:last]))
+        gt_usage.touch_or_warn("gt show", root, ids)
     except (gt_store.ContractError, ValueError, OSError, yaml.YAMLError) as exc:
         print(f"gt show: {exc}", file=sys.stderr)
         return 3 if isinstance(exc, gt_store.ContractError) else 1
