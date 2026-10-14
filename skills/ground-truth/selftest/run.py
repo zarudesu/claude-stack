@@ -3105,6 +3105,18 @@ def sharded_layout_scenarios() -> bool:
         str(msgs),
     )
 
+    # (7b) A banned_words.exclude glob over a shard is refused and does not hide the shard.
+    shard_exclude = ("    runner: pytest\n  banned_words:\n    exclude:\n"
+                     "    - path: .ground-truth/areas/s*.yaml\n      why: selftest\n")
+    with patched(sharded / ".ground-truth/contract.yaml", "    runner: pytest\n", shard_exclude):
+        msgs = [(i.severity, i.message) for i in contract_lib.run(sharded, "full", execute=False)]
+    ok &= record(
+        "layout: banned_words.exclude over a shard -> FAIL, banned word in the shard still reported",
+        ("fail", "banned_words.exclude may not cover contract artifacts: .ground-truth/areas/s*.yaml") in msgs
+        and any("leverage" in m for _, m in msgs),  # gt-allow: expected match text
+        str(msgs),
+    )
+
     # (2) Both layouts at once is refused.
     with added_file(sharded / "STATUS.yaml", git(sharded, "show", f"{legacy_sha}:STATUS.yaml")):
         cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)

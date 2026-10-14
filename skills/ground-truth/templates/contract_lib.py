@@ -123,8 +123,8 @@ _WARN_PATTERNS = [re.compile(r"\b" + w + r"\b", re.IGNORECASE) for w in _WARN_WO
 
 # Representative paths standing in for the contract's own artifacts. A
 # meta.banned_words.exclude glob is rejected in check_shape if it would
-# match any of these -- the scan exists to keep the contract's own files
-# clean, so it must never be told to skip them.
+# match any of these or a contract file on disk -- the scan exists to keep
+# the contract's own files clean, so it must never be told to skip them.
 _PROTECTED_ARTIFACT_PROBES = (
     "STATUS.yaml",
     ".ground-truth/contract.yaml",
@@ -158,8 +158,9 @@ def is_test_path(rel: str) -> bool:
     return any(m in name for m in _TEST_NAME_MARKERS)
 
 
-def _covers_contract_artifacts(pattern: str) -> bool:
-    return any(fnmatch.fnmatch(probe, pattern) for probe in _PROTECTED_ARTIFACT_PROBES)
+def _covers_contract_artifacts(root: Path, pattern: str) -> bool:
+    probes = (*_PROTECTED_ARTIFACT_PROBES, *gt_store.contract_files(root))
+    return any(fnmatch.fnmatch(probe, pattern) for probe in probes)
 
 
 def load_contract(root: Path) -> dict:
@@ -336,7 +337,7 @@ def check_shape(root: Path, data: dict) -> list[Issue]:
                                     "non-empty string 'why'",
                                 )
                             )
-                        if isinstance(path, str) and path and _covers_contract_artifacts(path):
+                        if isinstance(path, str) and path and _covers_contract_artifacts(root, path):
                             issues.append(
                                 Issue(
                                     "fail",
@@ -1869,7 +1870,7 @@ def check_no_banned_words(root: Path, data: dict) -> list[Issue]:
                     continue
                 if not isinstance(why, str) or not why:
                     continue
-                if _covers_contract_artifacts(path):
+                if _covers_contract_artifacts(root, path):
                     continue
                 exclude_entries.append((path, why))
 
@@ -1896,7 +1897,7 @@ def check_no_banned_words(root: Path, data: dict) -> list[Issue]:
             continue
         excluded = False
         for i, (pat, _why) in enumerate(exclude_entries):
-            if fnmatch.fnmatch(rel, pat):
+            if fnmatch.fnmatch(rel, pat) and not gt_store.is_contract_file(rel):
                 exclude_hits[i] += 1
                 excluded = True
         if excluded:
