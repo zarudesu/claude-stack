@@ -897,17 +897,17 @@ fi
 # Case R1: STATUS.yaml citation whose file gained lines above it and
 # whose cited line changed too (so the hook's --repair leaves it, see R5)
 # -- a line-reference drift is a warning, not a red Stop (D70): the hook
-# stays green and names the fix in stderr; --apply then clears the
-# citation.
+# stays green and names the --repair hint in stderr; --apply then clears
+# the citation.
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_remap_repo
 write_pricing 150
 shift_pricing_lines
 out=$(run_stop_hook false 2>&1); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "\[WARN\]" && printf '%s' "$out" | grep -q "remap_line_refs.py --apply"; then
-  pass "R1: Stop hook stays green on a stale line reference, warns and names remap --apply"
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "\[WARN\]" && printf '%s' "$out" | grep -q "remap_line_refs.py --repair"; then
+  pass "R1: Stop hook stays green on a stale line reference, warns and names remap --repair"
 else
-  fail "R1: Stop hook stays green on a stale line reference, warns and names remap --apply (rc=$rc out=$out)"
+  fail "R1: Stop hook stays green on a stale line reference, warns and names remap --repair (rc=$rc out=$out)"
 fi
 (cd "$REPO" && python3 tools/ground_truth/remap_line_refs.py --apply --base HEAD STATUS.yaml >/dev/null 2>&1); rc2=$?  # gt-allow: real install path, not prose
 if [ $rc2 -eq 0 ]; then

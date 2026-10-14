@@ -59,12 +59,14 @@ line per stale reference and a fix: hint, then exits 1 if it found any
 
 --repair rewrites STATUS_FILE in place like --apply, but only where the
 content proves the move, and prints the number of citations it changed.
-A path:N or path:N-M with a quote after it (as check_cited_lines in
-contract_lib reads it) whose lines lack the quote moves to the one line
-of the working-tree file holding it; a quote found 0 or 2+ times is left
-alone. Every other citation takes the base -> working-tree shift only
-when each cited line's base content equals its target line byte for
-byte. A quoted citation already holding its quote is not touched, so a
+A path:N or path:N-M with a quote of 8+ characters after it (as
+check_cited_lines in contract_lib reads it) whose lines lack the quote
+moves only when the quote stood on that base line (for a range, on one
+of its lines) and that whole base line occurs exactly once in the
+working-tree file: it moves there, a range by the same offset; anything
+else is left alone. Every other citation takes the base -> working-tree
+shift only when each cited line's base content equals its target line
+byte for byte. A quoted citation already holding its quote is not touched, so a
 second run changes nothing.
 """
 from __future__ import annotations
@@ -296,10 +298,12 @@ def _nearest_path(text: str, before: int, mappers: dict):
 @functools.lru_cache(maxsize=None)
 def lines_at(rev, path: str) -> list[str]:
     """Lines of a repository-relative path at git rev, or in the working tree
-    for rev None; [] when the file is not there."""
+    for rev None; [] when the file is not there or the path leaves the repository."""
     root = _repo_root()
+    full = os.path.realpath(os.path.join(root, path))
+    if not full.startswith(os.path.realpath(root) + os.sep):
+        return []
     if rev is None:
-        full = os.path.join(root, path)
         if not os.path.isfile(full):
             return []
         with open(full, encoding="utf-8", errors="replace") as f:
@@ -323,13 +327,13 @@ def _quote_after(text: str, end: int) -> str:
 
 
 def repair_quotes(text, base, current_id, rewritten, line_no):
-    """--repair: move each quoted path:N[-M] whose lines lack the quote to the
-    one working-tree line holding it. A range keeps the quote at the offset
-    it had at base, or else moves just far enough to cover it."""
+    """--repair: move each quoted path:N[-M] whose lines lack the quote, when the
+    quote (8+ characters) stood on base line N, or on one line of the range, and
+    that whole base line occurs exactly once in the working tree."""
     edits = []
     for m in CITE_RE.finditer(text):
         quote = _quote_after(text, m.end())
-        lines = lines_at(None, m["path"]) if quote else []
+        lines = lines_at(None, m["path"]) if len(quote) >= 8 else []
         if not lines:
             continue
         n = int(m["line"])
@@ -337,12 +341,11 @@ def repair_quotes(text, base, current_id, rewritten, line_no):
         end = int(m["line_end"]) if has_end else n
         if any(quote in lines[i - 1].strip() for i in range(max(n, 1), min(end, len(lines)) + 1)):
             continue
-        hits = [i for i, line in enumerate(lines, 1) if quote in line.strip()]
+        old = lines_at(base, m["path"])
+        anchor = next((i for i in range(max(n, 1), min(end, len(old)) + 1) if quote in old[i - 1].strip()), None)
+        hits = [i for i, line in enumerate(lines, 1) if anchor and line.strip() == old[anchor - 1].strip()]
         if len(hits) != 1:
             continue
-        old = lines_at(base, m["path"]) if has_end else []
-        anchor = next((i for i in range(n, min(end, len(old)) + 1) if quote in old[i - 1].strip()),
-                      n if hits[0] < n else end)
         delta = hits[0] - anchor
         stop = m.end("line_end") if has_end else m.end("line")
         new = f"{n + delta}-{end + delta}" if has_end else str(n + delta)
@@ -579,7 +582,7 @@ def main(argv: list[str]) -> int:
             new = r["new"][1:] if r["new"].startswith(":") else r["new"]
             print(f"{args.status_file}:{r['line']}: {r['path']}:{old} -> {new}")
         if rewritten:
-            print(f"fix: {sys.executable} tools/ground_truth/remap_line_refs.py --apply {args.status_file}")
+            print(f"fix: {sys.executable} tools/ground_truth/remap_line_refs.py --repair --base {args.base} {args.status_file}")
         return 1 if rewritten else 0
 
     if not args.repair:

@@ -217,9 +217,15 @@ def _store_cache(cache_path: Path, cfg: dict) -> None:
 def _status_dirty(root: Path) -> bool:
     try:
         cp = _git(root, ["status", "--porcelain", "--", "STATUS.yaml"])
+        if not cp.stdout.strip():
+            return False
+        diff = _git(root, ["diff", "-U0", "HEAD", "--", "STATUS.yaml"]).stdout.splitlines()
     except (OSError, subprocess.SubprocessError):
         return True
-    return bool(cp.stdout.strip())
+    # Line numbers the Stop hook's remap --repair shifted are not a claim being written.
+    removed = [re.sub(r"\d", "", line[1:]) for line in diff if line.startswith("-") and not line.startswith("---")]
+    added = [re.sub(r"\d", "", line[1:]) for line in diff if line.startswith("+") and not line.startswith("+++")]
+    return not removed or removed != added
 
 
 def _blast_gate(git_dir: Path, rel: str, sid: str, ids: list[str], via: str = "") -> int:

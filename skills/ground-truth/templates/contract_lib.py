@@ -2419,7 +2419,7 @@ def check_cited_lines(root: Path, data: dict, mode: str) -> list[Issue]:
                     severity,
                     cid,
                     f"cited line {label} does not contain «{shown}»; fix: run "
-                    "tools/ground_truth/remap_line_refs.py --apply or update the note",
+                    "tools/ground_truth/remap_line_refs.py --repair or update the note",
                 )
             )
     return issues

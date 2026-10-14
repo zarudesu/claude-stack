@@ -2844,7 +2844,7 @@ def cited_line_scenarios() -> bool:
             and "[WARN]" in out(cp)
             and "cite_bad" in out(cp)
             and "does not contain" in out(cp)
-            and "remap_line_refs.py --apply" in out(cp),
+            and "remap_line_refs.py --repair" in out(cp),
             out(cp),
         )
         cp = verify("full")

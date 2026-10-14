@@ -691,12 +691,12 @@ class AutoRepairChecks(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def status(self, *notes, commit=True):
+    def status(self, *notes, commit=True, enforcement="advisory"):
         claims = "".join(f"  - id: c{i}\n    component: c{i}\n    kind: status\n    status: implemented\n"
                          f"    path: src/core.py\n    check_kind: pytest\n    check: tests/test_core.py::test_x\n"
                          f"    note: {note}\n" for i, note in enumerate(notes))
         (self.repo / "STATUS.yaml").write_text(
-            "schema_version: 1\nmeta:\n  repo: fixture\n  enforcement: advisory\n  last_audited: '2026-10-13'\n"
+            f"schema_version: 1\nmeta:\n  repo: fixture\n  enforcement: {enforcement}\n  last_audited: '2026-10-13'\n"
             "  coverage:\n    roots: [src/]\n    runner: pytest\nclaims:\n" + claims)
         if commit:
             subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
@@ -718,11 +718,11 @@ class AutoRepairChecks(unittest.TestCase):
         return {k: e for k, e in gt_pending.load(self.repo)[2].items() if e["class"] == "cited-line"}
 
     def test_unique_quote_and_range_follow_their_lines_once(self):
-        self.status("see src/core.py:5 «def tax»", "see src/core.py:5-6 «return 2»")
+        self.status("see src/core.py:5 «def tax():»", "see src/core.py:5-6 «return 2»")
         self.shift()
         proc = self.stop()
         self.assertIn("ground-truth: auto-repaired 2 line refs in STATUS.yaml\n", proc.stderr)
-        self.assertEqual(self.notes(), ["see src/core.py:8 «def tax»", "see src/core.py:8-9 «return 2»"])
+        self.assertEqual(self.notes(), ["see src/core.py:8 «def tax():»", "see src/core.py:8-9 «return 2»"])
         self.assertEqual(self.cited(), {})
         self.assertEqual(self.counter.read_text().strip(), "2")
         before = (self.repo / "STATUS.yaml").read_bytes()
@@ -764,6 +764,45 @@ class AutoRepairChecks(unittest.TestCase):
         self.assertEqual(self.notes(), ["see src/core.py:8 for tax", "see src/core.py:2 for price"])
         self.assertIn("src/core.py:2 -> 5", proc.stderr)
         self.assertEqual(self.counter.read_text().strip(), "1")
+
+    def test_removed_line_and_short_quote_do_not_move(self):
+        # The comment mentions the removed function; a one-character quote matches anywhere.
+        self.status("see src/core.py:5 «def tax():»", "see src/core.py:2 «1»")
+        self.code.write_text("# def tax(): was removed, see billing\ndef price():\n    return 10\n")
+        proc = self.stop()
+        self.assertNotIn("auto-repaired", proc.stderr)
+        self.assertEqual(self.notes(), ["see src/core.py:5 «def tax():»", "see src/core.py:2 «1»"])
+        self.assertFalse(self.counter.exists())
+
+    def test_repair_shift_does_not_open_the_edit_guard(self):
+        shutil.copyfile(SKILL / "templates/gt_edit_guard.py", self.repo / "tools/ground_truth/gt_edit_guard.py")
+        self.status("see src/core.py:5 «def tax():»", enforcement="blocking")
+        self.shift("# header\n")
+        self.assertIn("auto-repaired 1", self.stop().stderr)
+        self.assertEqual(self.notes(), ["see src/core.py:6 «def tax():»"])
+        event = {"cwd": str(self.repo), "session_id": "s1", "tool_name": "Write",
+                 "tool_input": {"file_path": str(self.repo / "src/other.py"), "content": "y"}}
+        proc = subprocess.run([sys.executable, "tools/ground_truth/gt_edit_guard.py"], cwd=self.repo,
+                              input=json.dumps(event), text=True, capture_output=True)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+
+    def test_garbage_counter_reads_as_zero(self):
+        self.counter.parent.mkdir(exist_ok=True)
+        self.counter.write_text("1x\n")
+        self.status("see src/core.py:5 «def tax():»")
+        self.shift()
+        proc = self.stop()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.counter.read_text().strip(), "1")
+
+    def test_citation_outside_the_repository_is_not_read(self):
+        outside = os.path.relpath(SKILL / "SKILL.md", self.repo)
+        self.assertTrue(outside.startswith(".."))
+        proc = subprocess.run([sys.executable, "-c", "import sys, remap_line_refs as r\n"
+                               "print(len(r.lines_at(None, sys.argv[1])), len(r.lines_at(None, 'src/core.py')))",
+                               outside], cwd=self.repo, capture_output=True, text=True,
+                              env={**os.environ, "PYTHONPATH": str(self.repo / "tools/ground_truth")})
+        self.assertEqual(proc.stdout, "0 6\n", proc.stderr)
 
 
 class BatchReviewChecks(unittest.TestCase):
