@@ -358,6 +358,9 @@ limits:            # пишется всегда (действующие зна�
 classes:           # необязательно; ставит владелец по рекомендации report, сам скрипт не меняет
   no-canary: ignore  # record не ставит находки класса в очередь (уже стоящие снимаются)
   stale-area: block  # Stop: любая запись класса в тронутой области — блок (только blocking)
+closed:            # надгробия: пишет batch для вердиктов кроме Keep; снимает record, когда находки нет
+  uncovered:src/b.py: {first_seen: {date: '2026-09-28', rev: abc1234}, batches_survived: 0}
+reopened: 1        # находок, вернувшихся по надгробию с прошлого batch; batch переносит в лог и обнуляет
 pending:
 - key: uncovered:src/a.py      # <class>:<объект>, ключ дедупа; cited-line: <id>:<path>:<sha1 цитаты>[:8]
   area: src                    # область model.yaml, иначе верхний каталог, иначе global
@@ -370,9 +373,11 @@ pending:
 
 Ключ `cited-line` — `cited-line:<id>:<path>:<первые 8 hex sha1 цитаты в том виде, как её печатает verify>`, без номера строки: сдвиг или правка `N` не сбрасывает `first_seen`. Записи со старым ключом (`cited-line:<id>:<path>:<N>`) в уже установленных очередях один раз снимутся (`resolved`) и встанут заново с новым ключом и сегодняшним `first_seen`; миграции нет.
 
-`kept` — долг признан осознанно: эскалация по возрасту считается от `kept.date`, а не от `first_seen`; запись по-прежнему в счёт `total`/`per_area`.
+`kept` — долг признан осознанно: эскалация по возрасту считается от `kept.date`, а не от `first_seen`, по сессиям — не считается; запись по-прежнему в счёт `total`/`per_area`.
 
-`.ground-truth/pending-log.yaml` — лог батч-разборов, коммитится, `batch` только дописывает один блок за прогон: `date`, `rev`, `keys` (очередь после прогона), `flow: {in, out}` (приток/отток против `keys` прошлого блока), `verdicts: {Keep: n, ...}`, `closed: {class: n}`, `noise: {class: n}` (Delete с `noise: true`), `escalated: {class: n}` (пришли на прогон эскалированными), `carried` (без вердикта), `age: {median, max}` (дни с `first_seen`, медиана — нижняя), `auto_repaired` (ссылок, починенных Stop-хуком с прошлого прогона: хук прибавляет к локальному `<git dir>/ground-truth-auto-repaired`, `batch` переносит число в блок и удаляет файл). Пример и метрики `report` — batch-review.md.
+`closed` — запись, снятая вердиктом (не Keep), оставляет надгробие. Если record снова находит её ключ, запись возвращается со старым `first_seen` и `batches_survived + 1`, надгробие снимается, `reopened` растёт на 1: вердикт не сбрасывает возраст. Если record, судящий этот класс, находки не видит, надгробие снимается.
+
+`.ground-truth/pending-log.yaml` — лог батч-разборов, коммитится, `batch` только дописывает один блок за прогон: `date`, `rev`, `keys` (очередь после прогона), `flow: {in, out}` (приток/отток против `keys` прошлого блока), `verdicts: {Keep: n, ...}`, `closed: {class: n}`, `noise: {class: n}` (Delete с `noise: true`), `escalated: {class: n}` (пришли на прогон эскалированными), `carried` (без вердикта), `age: {median, max}` (дни с `first_seen`, медиана — нижняя), `auto_repaired` (ссылок, починенных Stop-хуком с прошлого прогона: хук прибавляет к локальному `<git dir>/ground-truth-auto-repaired`, `batch` переносит число в блок и удаляет файл), `reopened` (записей, вернувшихся по надгробию `closed` с прошлого прогона). Пример и метрики `report` — batch-review.md.
 
 `escalated`/`reason` не хранятся: их пересчитывает каждое чтение. Сессии, видевшие запись, — локально в `<git dir>/ground-truth-pending-sessions.json` (`{key: [session id, ...]}`; вне git-репо — `.ground-truth/` рядом с очередью), поэтому ветки разных сессий сливаются без конфликта очереди, а CI эскалирует только по возрасту и `batches_survived`. Старые поля `last_seen`, `sessions`, `escalated`, `reason` убираются при следующей записи.
 
