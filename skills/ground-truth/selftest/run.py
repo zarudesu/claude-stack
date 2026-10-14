@@ -3414,13 +3414,28 @@ def migrate_scenarios() -> bool:
         '    path: "main.py"\n', "    path: [svc, main.py]\n", 1),
         files={"tools/ground_truth/probes/own_probe.py": 'STATUS = "STATUS.yaml"\n'})
     rc_before = full(paths)
+    probe = "tools/ground_truth/probes/own_probe.py"
+    cp_dry = migrate(paths, "--skill", str(SKILL_ROOT))
+    cp_refused = migrate(paths, "--write", "--skill", str(SKILL_ROOT))
+    ok &= record(
+        "migrate: a repo probe naming STATUS.yaml -> dry run lists it, --write rc 3 naming it and "
+        "gt_store.load, nothing written; files equal to skill templates are not listed",
+        cp_dry.returncode == 0 and probe in cp_dry.stdout.split("probes that name")[-1]
+        and cp_refused.returncode == 3 and probe in cp_refused.stderr
+        and "gt_store.load(root).data" in cp_refused.stderr
+        and (paths / "STATUS.yaml").is_file() and git(paths, "status", "--porcelain") == ""
+        and "tests/test_status_contract.py" not in cp_dry.stdout
+        and "tests/test_status_contract.py" in migrate(paths).stdout,
+        f"dry={out(cp_dry)} refused={out(cp_refused)}",
+    )
+    (paths / probe).write_text('STATUS = "contract"\n')
+    git(paths, "commit", "-qam", "probe reads the contract through gt_store")
     cp = migrate(paths, "--write", "--max-claims", "1", "--min-claims", "1")
     areas = area_of(paths)
     ok &= record(
         "migrate: roots ['.'], multi-path claims, oversized services/ split -> majority area, "
-        "tie to the first path, Δ0, verify rc unchanged, a repo probe naming STATUS.yaml listed",
+        "tie to the first path, Δ0, verify rc unchanged",
         cp.returncode == 0 and equal in cp.stdout and full(paths) == rc_before
-        and "tools/ground_truth/probes/own_probe.py" in cp.stdout.split("edit by hand:")[-1]
         and areas["handlers_http"] == areas["alpha_greeting"] == "services-alpha"
         and areas["beta_worker_stub"] == "services-beta" and areas["main_script"] == "svc"
         and areas["external_dashboard"] == areas["ops_smoke"] == "global"

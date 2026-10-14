@@ -17,7 +17,8 @@ STATUS.yaml is dropped and the receipts of those areas, if fresh before,
 are refreshed.
 
 Exit 0: migrated, or already sharded. 1: not equivalent, rolled back.
-2: bad arguments. 3: contract error, mixed or missing layout, failed precheck.
+2: bad arguments. 3: contract error, mixed or missing layout, failed precheck,
+a repo probe that still names STATUS.yaml (--write only).
 """
 from __future__ import annotations
 
@@ -315,7 +316,8 @@ def fresh_areas(model_root: Path, areas: list[str], warns: list[str]) -> list[st
     return fresh
 
 
-def report(root: Path, plan: dict) -> None:
+def report(root: Path, plan: dict, skill: Path | None = None) -> list[str]:
+    """Print the plan; return the repo probes that still name STATUS.yaml."""
     groups, sources = plan["groups"], plan["sources"]
     width = max(map(len, groups), default=0) + 1
     print(f"{'area':{width}} {'claims':>6}  sources")
@@ -342,8 +344,17 @@ def report(root: Path, plan: dict) -> None:
     # Installed tools read either layout; a repo's own probes may not, and verify runs them.
     by_hand = [p for p in listed.stdout.splitlines()
                if p != STATUS and os.path.dirname(p) != "tools/ground_truth"]
+    if skill:
+        # A file shipped by the skill as is already reads either layout.
+        shipped = {t.read_bytes() for t in (skill / "templates").rglob("*") if t.is_file()}
+        by_hand = [p for p in by_hand if (root / p).read_bytes() not in shipped]
     if by_hand:
         print(f"still name {STATUS}, edit by hand: {', '.join(by_hand)}")
+    probes = [p for p in by_hand if p.startswith("tools/ground_truth/probes/")]
+    if probes:
+        print(f"probes that name {STATUS} (verify runs them; --write refuses until they change): "
+              + ", ".join(probes))
+    return probes
 
 
 def _norm(issues) -> collections.Counter:
@@ -470,10 +481,15 @@ def main(argv: list[str]) -> int:
     except (ContractError, ValueError, yaml.YAMLError) as exc:
         print(f"gt migrate: {exc}", file=sys.stderr)
         return 3
-    report(root, plan)
+    probes = report(root, plan, args.skill)
     if not args.write:
         print("dry run: nothing written; run with --write to apply")
         return 0
+    if probes:
+        print(f"gt migrate: these probes name {STATUS} and would break once it is gone: {', '.join(probes)}; "
+              "read the contract through gt_store.load(root).data instead, commit, then run --write again",
+              file=sys.stderr)
+        return 3
     return write(root, plan)
 
 
