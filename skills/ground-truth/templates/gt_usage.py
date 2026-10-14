@@ -21,15 +21,21 @@ tracked .md file names it as STATUS.yaml#<id> or claim:<id>.
 from __future__ import annotations
 
 import argparse
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import sys
+
+import yaml
 
 import gt_pending
 import gt_store
 
 LOCAL = "ground-truth-usage.json"
 LOCK = "ground-truth-usage.lock"
+COMMITTED = f"{gt_store.DIR}/usage.yaml"
+UNUSED_DAYS = 90
+PER_BATCH = 5  # unused candidates queued by one batch review
 
 
 def _local_path(root):
@@ -55,6 +61,62 @@ def touch(root, ids):
         for cid in ids:
             last[cid] = max(last.get(cid, today), today)
         gt_pending._write(path, json.dumps(data, sort_keys=True))
+
+
+def committed(root):
+    path = Path(root) / COMMITTED
+    data = yaml.safe_load(path.read_text()) if path.is_file() else None
+    return data if isinstance(data, dict) else {}
+
+
+def fold(root, keep):
+    """Merge the local record and this month for the `keep` ids into usage.yaml; returns what it holds."""
+    local, old = _local(root), committed(root)
+    month = gt_pending._today().isoformat()[:7]
+    claims = {str(k): str(v) for k, v in (old.get("claims") or {}).items()}
+    for cid, day in [*(local.get("last") or {}).items(), *((cid, month) for cid in keep)]:
+        claims[cid] = max(claims.get(cid, ""), day[:7])
+    since = [str(s)[:7] for s in (old.get("since"), local.get("since")) if s]
+    if not (since or claims):
+        return old
+    new = {"since": min(since or [month]), "claims": dict(sorted(claims.items()))}
+    if new != old:
+        (Path(root) / gt_store.DIR).mkdir(exist_ok=True)
+        gt_pending._write(Path(root) / COMMITTED, yaml.safe_dump(new, sort_keys=False))
+    return new
+
+
+def _month_end(month):
+    y, m = map(int, month.split("-"))
+    return date(y + m // 12, m % 12 + 1, 1) - timedelta(days=1)
+
+
+def unused(root, data, usage):
+    """(last use, claim id) of the claims due for review, oldest first; last use is None when never read.
+    A committed month counts as its last day, so a claim is never proposed early."""
+    local = _local(root)
+    since = [date.fromisoformat(local["since"])] if local.get("since") else []
+    since += [_month_end(str(usage["since"]))] if usage.get("since") else []
+    days = ((data.get("meta") or {}).get("ttl") or {}).get("unused_days", UNUSED_DAYS)
+    cutoff = gt_pending._today() - timedelta(days=days)
+    if not since or min(since) >= cutoff:
+        return []
+    exempt = {d.get("ref") for d in data.get("debt") or [] if isinstance(d, dict) and d.get("state") == "open"}
+    exempt |= {e.get(k) for e in data.get("edges") or [] if isinstance(e, dict) for k in ("from", "to")}
+    for rel in gt_pending._git(root, "ls-files", "*.md").splitlines():
+        if (Path(root) / rel).is_file():
+            exempt.update(gt_store.CLAIM_REF_RE.findall((Path(root) / rel).read_text(errors="replace")))
+    out = []
+    for claim in data.get("claims") or []:
+        cid = claim.get("id") if isinstance(claim, dict) else None
+        if (not isinstance(cid, str) or cid in exempt or claim.get("canary") or claim.get("mutation")
+                or claim.get("kind") == "live_state"):
+            continue
+        last = [date.fromisoformat(local["last"][cid])] if cid in (local.get("last") or {}) else []
+        last += [_month_end(str(usage["claims"][cid]))] if cid in (usage.get("claims") or {}) else []
+        if not last or max(last) < cutoff:
+            out.append((max(last) if last else None, cid))
+    return sorted(out, key=lambda item: (item[0] or date.min, item[1]))
 
 
 def touch_session(root):

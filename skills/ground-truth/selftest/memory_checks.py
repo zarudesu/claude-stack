@@ -1071,6 +1071,86 @@ class BatchReviewChecks(unittest.TestCase):
         self.edit("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
         self.assertIn("; batch review due: no batch review since 2000-01-01, 1 escalated\n", self.out("summary"))
 
+    def ttl(self, claims, debt=(), edges=(), today="2026-04-02"):
+        """A contract nobody read since the local record began on 2026-01-01; one batch review on `today`."""
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump(
+            {"meta": {"enforcement": "blocking"}, "claims": claims, "debt": list(debt), "edges": list(edges)}))
+        (self.repo / ".git/ground-truth-usage.json").write_text('{"since": "2026-01-01", "last": {}}')
+        return self.batch_on(today, [])
+
+    def batch_on(self, today, verdicts):
+        with mock.patch.dict(os.environ, {"GT_TODAY": today}):
+            return self.batch(verdicts)
+
+    def unused(self):
+        return {k: e for k, e in gt_pending.load(self.repo)[2].items() if e["class"] == "unused"}
+
+    def test_unused_claim_after_ttl_and_each_exemption(self):
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/notes.md").write_text("see claim:doc and STATUS.yaml#doc2\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", "docs"], check=True)
+        claims = [{"id": "plain", "path": "src/plain.py"}, {"id": "canary", "canary": True},
+                  {"id": "mut", "mutation": {"file": "src/plain.py"}}, {"id": "live", "kind": "live_state"},
+                  {"id": "owed"}, {"id": "doc"}, {"id": "doc2"}, {"id": "edge"}]
+        debt = [{"id": "D1", "ref": "owed", "state": "open"}]
+        edges = [{"from": "edge", "to": "other-repo:api", "probe": "probes/api.sh"}]
+        self.assertEqual(self.ttl(claims, debt, edges, today="2026-03-31")[0], 0)  # the record is 89 days old
+        self.assertEqual(self.unused(), {})
+        self.assertEqual(self.batch_on("2026-04-02", [])[0], 0)
+        self.assertEqual({k: (e["area"], e["paths"], e["evidence"]) for k, e in self.unused().items()},
+                         {"unused:plain": ("src", ["src/plain.py"], "no recorded use after 2026-01")})
+        (self.repo / ".git/ground-truth-usage.json").write_text('{"since": "2026-01-01", "last": {"plain": "2026-01-03"}}')
+        self.queue.unlink()
+        self.assertEqual(self.batch_on("2026-04-02", [])[0], 0)  # read 89 days ago
+        self.assertEqual(self.unused(), {})
+
+    def test_at_most_five_unused_per_batch(self):
+        self.ttl([{"id": f"u{i}"} for i in range(7)])
+        self.assertEqual(sorted(self.unused()), [f"unused:u{i}" for i in range(5)])
+        self.assertEqual(self.batch_on("2026-04-02", [])[0], 0)
+        self.assertEqual(len(self.unused()), 7)
+
+    def test_unused_verdicts(self):
+        claims = [{"id": "plain", "path": "src/plain.py"}, {"id": "wide", "path": "src"}, {"id": "narrow", "path": "src/n.py"}]
+        self.ttl(claims)
+        self.assertEqual(sorted(self.unused()), ["unused:narrow", "unused:plain", "unused:wide"])
+        before = self.queue.read_bytes()
+        bad = [({"key": "unused:plain", "verdict": "Update", "evidence": "claim fixed"}, "takes Keep, Delete or"),
+               ({"key": "unused:plain", "verdict": "Replace", "evidence": "claim:wide"}, "takes Keep, Delete or"),
+               ({"key": "unused:plain", "verdict": "Delete", "evidence": "dead"}, "removed from the contract")]
+        for item, message in bad:
+            rc, err = self.batch_on("2026-04-02", [item])
+            self.assertEqual(rc, 1, item)
+            self.assertIn(message, err)
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump({"meta": {}, "claims": claims[1:],
+                                                               "debt": [{"id": "D1", "ref": "plain", "state": "open"}]}))
+        rc, err = self.batch_on("2026-04-02", [{"key": "unused:plain", "verdict": "Delete", "evidence": "dead"}])
+        self.assertEqual(rc, 1)
+        self.assertIn("no open debt on it", err)
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump({"meta": {}, "claims": claims[1:]}))
+        for into, message in (("claim:narrow", "claim:narrow paths do not cover src/plain.py"),
+                              ("claim:gone", "needs into: claim:<id> of an existing claim"),
+                              ("unused:wide", "needs into: claim:<id> of an existing claim")):
+            rc, err = self.batch_on("2026-04-02", [{"key": "unused:plain", "verdict": "Consolidate", "into": into,
+                                                    "evidence": "same file"}])
+            self.assertEqual(rc, 1, into)
+            self.assertIn(message, err)
+        self.assertEqual(self.queue.read_bytes(), before)
+        rc, err = self.batch_on("2026-04-20", [
+            {"key": "unused:plain", "verdict": "Consolidate", "into": "claim:wide", "evidence": "wide covers it"},
+            {"key": "unused:narrow", "verdict": "Keep", "evidence": "read by the billing runbook"}])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(sorted(self.unused()), ["unused:wide"])
+        self.assertEqual(self.log()[-1]["removed"], ["plain"])
+        usage = (self.repo / ".ground-truth/usage.yaml").read_bytes()
+        self.assertEqual(usage, b"since: 2026-01\nclaims:\n  narrow: 2026-04\n")
+        self.assertEqual(self.batch_on("2026-04-20", [])[0], 0)
+        self.assertEqual((self.repo / ".ground-truth/usage.yaml").read_bytes(), usage)
+        self.assertNotIn("removed", self.log()[-1])
+        (self.repo / "STATUS.yaml").write_text(yaml.safe_dump({"meta": {}, "claims": claims[2:]}))
+        self.assertEqual(self.batch_on("2026-04-20", [{"key": "unused:wide", "verdict": "Delete", "evidence": "dead"}])[0], 0)
+        self.assertEqual((self.log()[-1]["removed"], self.unused()), (["wide"], {}))
+
 
 
 class PacketChecks(unittest.TestCase):

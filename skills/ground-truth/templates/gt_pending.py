@@ -32,6 +32,12 @@ leaves a tombstone under `closed:`, so a finding that comes back keeps its age
 and counts as reopened. report prints the queue, the last run's metrics,
 alarms and class recommendations (references/batch-review.md). repaired adds
 the Stop hook's auto-repair count to the local counter batch logs.
+
+batch also folds the local usage record into .ground-truth/usage.yaml and
+queues at most 5 claims nobody read for meta.ttl.unused_days as
+unused:<id> (gt_usage.py). Such an entry takes Keep, which records this
+month as a use, or Delete or a merge into claim:<id> once the claim is gone
+from the contract; the log names the claims removed that way.
 """
 from __future__ import annotations
 
@@ -60,7 +66,7 @@ LOG = ".ground-truth/pending-log.yaml"
 SESSIONS = "ground-truth-pending-sessions.json"
 REPAIRED = "ground-truth-auto-repaired"  # next to SESSIONS; the Stop hook adds, batch logs and clears
 LOCK = "ground-truth-pending.lock"  # next to SESSIONS; held around every read-modify-write
-STORED = ("key", "area", "class", "first_seen", "evidence", "batches_survived", "kept")
+STORED = ("key", "area", "class", "first_seen", "evidence", "batches_survived", "kept", "paths")
 VERDICTS = ("Keep", "Update", "Consolidate", "Replace", "Delete")  # gt-allow: verdict name, not prose
 PLACEHOLDERS = {"", "-", "?", "...", "todo", "tbd", "n/a", "na", "none"}
 # Defaults; a `limits:` mapping at the top of the queue file overrides them.
@@ -358,7 +364,31 @@ def summary(root):
               + (f"; batch review due: {', '.join(due)}" if due else ""))
 
 
-def _verdict_problem(item, entries, given, claims):
+def _paths(claim):
+    raw = claim.get("path")
+    return [p for p in ([raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []) if isinstance(p, str) and p]
+
+
+def _unused_problem(cid, item, entry, claims, open_refs):
+    verdict = item["verdict"]
+    if verdict in ("Update", "Replace"):
+        return "an unused claim takes Keep, Delete or Consolidate"  # gt-allow: verdict name, not prose
+    if verdict == "Keep":
+        return None
+    if cid in claims or cid in open_refs:
+        return f"{verdict} needs claim {cid} removed from the contract and no open debt on it"
+    if verdict == "Consolidate":  # gt-allow: verdict name, not prose
+        into = str(item.get("into"))
+        target = claims.get(into[len("claim:"):]) if into.startswith("claim:") else None
+        if target is None:
+            return "Consolidate of an unused claim needs into: claim:<id> of an existing claim"  # gt-allow: verdict name
+        own = _paths(target)
+        if not all(any(p == q or p.startswith(q.rstrip("/") + "/") for q in own) for p in entry.get("paths") or []):
+            return f"{into} paths do not cover {', '.join(entry['paths'])}"
+    return None
+
+
+def _verdict_problem(item, entries, given, claims, open_refs):
     key, verdict, evidence = item.get("key"), item.get("verdict"), item.get("evidence")
     if key not in entries:
         return "not in the queue"
@@ -368,9 +398,13 @@ def _verdict_problem(item, entries, given, claims):
         return f"verdict must be one of {', '.join(VERDICTS)}"
     if not isinstance(evidence, str) or evidence.strip().lower() in PLACEHOLDERS:
         return "evidence is empty or a placeholder"
-    if verdict == "Consolidate" and (item.get("into") not in entries or item["into"] == key):  # gt-allow: verdict name
+    if key.startswith("unused:"):
+        problem = _unused_problem(key[len("unused:"):], item, entries[key], claims, open_refs)
+        if problem:
+            return problem
+    elif verdict == "Consolidate" and (item.get("into") not in entries or item["into"] == key):  # gt-allow: verdict name
         return "Consolidate needs into: <another queued key>"  # gt-allow: verdict name, not prose
-    if verdict == "Replace" and not set(gt_store.CLAIM_REF_RE.findall(evidence)) & claims:
+    if verdict == "Replace" and not set(gt_store.CLAIM_REF_RE.findall(evidence)) & claims.keys():
         return "Replace evidence must name STATUS.yaml#<id> of an existing claim"
     if item.get("noise") and verdict != "Delete":
         return "noise is only for Delete"
@@ -388,11 +422,12 @@ def _batch(root, verdicts_file):
     items = yaml.safe_load(Path(verdicts_file).read_text()) or []
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise ValueError(f"{verdicts_file} must be a list of mappings")
-    claims = {c.get("id") for c in gt_store.load(Path(root)).data.get("claims") or []
-              if isinstance(c, dict)} if gt_store.contract_files(Path(root)) else set()
+    contract = gt_store.load(Path(root)) if gt_store.contract_files(Path(root)) else gt_store.Contract({})
+    claims = {c.get("id"): c for c in contract.data.get("claims") or [] if isinstance(c, dict)}
+    open_refs = {d.get("ref") for d in contract.data.get("debt") or [] if isinstance(d, dict) and d.get("state") == "open"}
     errors, given = [], {}
     for item in items:
-        problem = _verdict_problem(item, entries, given, claims)
+        problem = _verdict_problem(item, entries, given, claims, open_refs)
         if problem:
             errors.append(f"ground-truth pending batch: {item.get('key')}: {problem}")
         given.setdefault(item.get("key"), item)
@@ -403,6 +438,7 @@ def _batch(root, verdicts_file):
     today, before = _today(), set(entries)
     previous = set(log[-1]["keys"]) if log else set()
     verdicts, closed, noise, carried = Counter(), Counter(), Counter(), 0
+    keep, removed = [], []
     escalated = Counter(e["class"] for e in entries.values() if e["escalated"])
     repaired = _sessions_path(root).with_name(REPAIRED)
     tombs = data.get("closed") or {}
@@ -413,6 +449,10 @@ def _batch(root, verdicts_file):
             carried += 1
             continue
         verdicts[item["verdict"]] += 1
+        if entry["class"] == "unused":  # no tombstone: Keep restarts the clock, the others removed the claim
+            del entries[key]
+            (keep if item["verdict"] == "Keep" else removed).append(key[len("unused:"):])
+            continue
         if item["verdict"] == "Keep":
             entry.update(kept={"date": today.isoformat(), "evidence": item["evidence"][:160]}, batches_survived=0)
             continue
@@ -428,12 +468,26 @@ def _batch(root, verdicts_file):
              "noise": {c: n for c, n in noise.items() if n}, "escalated": dict(escalated), "carried": carried,
              "age": {"median": statistics.median_low(ages), "max": max(ages)},
              "auto_repaired": _repaired(repaired), "reopened": data.pop("reopened", 0)}
+    if removed:
+        block["removed"] = sorted(removed)
+    import gt_usage  # here, not at the top: gt_usage imports this module
+    usage = gt_usage.fold(root, keep)
+    room = max(0, min(gt_usage.PER_BATCH, limits["total"] - len(entries)))
+    new = [(last, cid) for last, cid in gt_usage.unused(root, contract.data, usage) if f"unused:{cid}" not in entries][:room]
+    areas = model_areas(root) if new else []
+    for last, cid in new:
+        paths = _paths(claims[cid])
+        entries[f"unused:{cid}"] = {
+            "key": f"unused:{cid}", "area": contract.area_of_claim.get(cid) or (area_of(paths[0], areas) if paths else "global"),
+            "class": "unused", "first_seen": {"date": today.isoformat(), "rev": block["rev"]},
+            "evidence": f"no recorded use after {last or usage['since']}", "batches_survived": 0, "paths": paths}
     data["closed"] = dict(sorted(tombs.items()))
     _write(Path(root) / QUEUE, _dump(data, limits, entries))
     old = (Path(root) / LOG).read_text() if log else ""
     _write(Path(root) / LOG, old + yaml.safe_dump([block], sort_keys=False, allow_unicode=True))
     repaired.unlink(missing_ok=True)
-    print(f"ground-truth pending batch: {len(items)} verdicts, {carried} carried, {len(entries)} left")
+    print(f"ground-truth pending batch: {len(items)} verdicts, {carried} carried, {len(entries)} left"
+          + (f", {len(new)} of them unused claims just queued" if new else ""))
     return 0
 
 
