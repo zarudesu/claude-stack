@@ -17,9 +17,8 @@ from pathlib import Path
 
 import yaml
 
-
-class ContractError(Exception):
-    """STATUS.yaml is missing or does not parse as a mapping."""
+import gt_store
+from gt_store import ContractError
 
 
 @dataclass
@@ -128,6 +127,9 @@ _WARN_PATTERNS = [re.compile(r"\b" + w + r"\b", re.IGNORECASE) for w in _WARN_WO
 # clean, so it must never be told to skip them.
 _PROTECTED_ARTIFACT_PROBES = (
     "STATUS.yaml",
+    ".ground-truth/contract.yaml",
+    ".ground-truth/debt.yaml",
+    ".ground-truth/areas/example.yaml",
     "tools/ground_truth/contract_lib.py",
     "tools/ground_truth/verify.py",
     "tools/ground_truth/probes/example_probe.py",
@@ -161,16 +163,7 @@ def _covers_contract_artifacts(pattern: str) -> bool:
 
 
 def load_contract(root: Path) -> dict:
-    path = root / "STATUS.yaml"
-    if not path.is_file():
-        raise ContractError(f"STATUS.yaml not found at {path}")
-    try:
-        data = yaml.safe_load(path.read_text())
-    except yaml.YAMLError as exc:
-        raise ContractError(f"STATUS.yaml is not valid YAML: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ContractError("STATUS.yaml did not parse to a mapping")
-    return data
+    return gt_store.load(root).data
 
 
 def _under_human_docs(rel: str) -> bool:
@@ -225,10 +218,18 @@ def _git_ls_files(root: Path, include_untracked: bool = False) -> list[str]:
 def check_shape(root: Path, data: dict) -> list[Issue]:
     issues: list[Issue] = []
 
-    if data.get("schema_version") != 1:
+    sharded = gt_store.detect_layout(root) == gt_store.SHARDED
+    want_version = 2 if sharded else 1
+    if data.get("schema_version") != want_version:
         issues.append(
-            Issue("fail", "-", f"schema_version must be 1, got {data.get('schema_version')!r}")
+            Issue(
+                "fail",
+                "-",
+                f"schema_version must be {want_version}, got {data.get('schema_version')!r}",
+            )
         )
+    if sharded:
+        issues += [Issue("fail", cid, msg) for cid, msg in gt_store.load(root).problems]
 
     meta = data.get("meta")
     if not isinstance(meta, dict):
@@ -1182,8 +1183,9 @@ def _collect_only(root: Path, nodeids: list[str]) -> list[Issue]:
     return []
 
 
-def check_collectible(root: Path, data: dict, mode: str) -> list[Issue]:
+def check_collectible(root: Path, data: dict, mode: str, execute: bool = True) -> list[Issue]:
     issues: list[Issue] = []
+    run_checks = mode == "full" and execute
     pytest_nodeids: list[str] = []
     # (check_kind, file-or-package, test name) already executed: two claims
     # pointing at the same test must not pay for it twice.
@@ -1223,32 +1225,32 @@ def check_collectible(root: Path, data: dict, mode: str) -> list[Issue]:
                 ok, msg = _resolve_go_test(root, part)
                 if not ok:
                     issues.append(Issue("fail", cid, msg))
-                elif mode == "full":
+                elif run_checks:
                     run_once(cid, kind, part)
             elif kind == "js_test":
                 ok, msg = _resolve_js_test(root, part)
                 if not ok:
                     issues.append(Issue("fail", cid, msg))
-                elif mode == "full":
+                elif run_checks:
                     run_once(cid, kind, part)
             elif kind == "junit":
                 ok, msg, _ = _resolve_junit(root, part)
                 if not ok:
                     issues.append(Issue("fail", cid, msg))
-                elif mode == "full":
+                elif run_checks:
                     run_once(cid, kind, part)
             elif kind == "probe":
                 ok, msg = _resolve_probe_static(root, part)
                 if not ok:
                     issues.append(Issue("fail", cid, msg))
-                elif mode == "full":
+                elif run_checks:
                     ok2, msg2, warn = _run_probe(root, part)
                     if warn:
                         issues.append(Issue("fail", cid, f"check not verified: {msg2}"))
                     elif not ok2:
                         issues.append(Issue("fail", cid, msg2))
 
-    if mode == "full" and pytest_nodeids:
+    if run_checks and pytest_nodeids:
         ok, message, _ = _run_pytest(root, pytest_nodeids,
                                     {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, 180)
         if not ok:
@@ -1353,7 +1355,7 @@ def check_links(root: Path, data: dict, mode: str) -> list[Issue]:
             )
 
     if mode == "full":
-        pattern = re.compile(r"STATUS\.yaml#([A-Za-z0-9_]+)")
+        pattern = gt_store.CLAIM_REF_RE
         try:
             tracked = _git_ls_files(root)
         except GitUnavailable as exc:
@@ -1379,7 +1381,7 @@ def check_links(root: Path, data: dict, mode: str) -> list[Issue]:
                 ref_id = m.group(1)
                 if ref_id not in by_id:
                     issues.append(
-                        Issue("fail", "-", f"{rel}: reference to unknown claim STATUS.yaml#{ref_id}")
+                        Issue("fail", "-", f"{rel}: reference to unknown claim {m.group(0)}")
                     )
 
     return issues
@@ -1532,21 +1534,18 @@ def check_debt_coverage(root: Path, data: dict) -> list[Issue]:
 
 
 def _baseline_debt_states(toplevel: Path, root: Path, base: str) -> dict[str, str]:
-    """debt id -> state from the baseline STATUS.yaml. Empty when it does not
+    """debt id -> state from the baseline contract. Empty when it does not
     parse -- the caller only reaches here after _baseline_claims already
-    parsed the same document for the same base, so that is not expected to
+    parsed the same contract for the same base, so that is not expected to
     happen in practice."""
-    shown = _git_run(toplevel, ["show", f"{base}:{_rel_status_path(toplevel, root)}"])
-    if shown.returncode != 0:
-        return {}
     try:
-        doc = yaml.safe_load(shown.stdout)
-    except yaml.YAMLError:
+        baseline = gt_store.load_at(toplevel, root, base)
+    except ContractError:
         return {}
-    if not isinstance(doc, dict):
+    if baseline is None:
         return {}
     out: dict[str, str] = {}
-    for entry in doc.get("debt") or []:
+    for entry in baseline.data.get("debt") or []:
         if isinstance(entry, dict) and isinstance(entry.get("id"), str):
             out[entry["id"]] = entry.get("state")
     return out
@@ -1654,7 +1653,7 @@ def check_debt_resolve(root: Path, data: dict, mode: str) -> list[Issue]:
         return _debt_resolve_issues(root, data, mode)
     except GitUnavailable as exc:
         severity = "fail" if mode == "full" else "warn"
-        return [Issue(severity, "-", f"could not read baseline STATUS.yaml: {exc}")]
+        return [Issue(severity, "-", f"could not read baseline {gt_store.contract_name(root)}: {exc}")]
 
 
 def check_canary_roots(root: Path, data: dict, mode: str) -> list[Issue]:
@@ -1767,7 +1766,12 @@ def check_audit_due(root: Path, data: dict, mode: str) -> list[Issue]:
                 roots = coverage_cfg.get("roots") or [] if isinstance(coverage_cfg, dict) else []
                 excludes = coverage_cfg.get("exclude") or [] if isinstance(coverage_cfg, dict) else []
                 paths = _rebase_to_root(_diff_paths(toplevel, [commit, "HEAD"]), toplevel, root)
-                changed = sum(1 for rel in paths if _under_coverage_roots(rel, roots, excludes))
+                changed = sum(
+                    1
+                    for rel in paths
+                    if not gt_store.is_contract_file(rel)
+                    and _under_coverage_roots(rel, roots, excludes)
+                )
                 if changed > _AUDIT_MAX_FILES:
                     reasons.append(
                         f"{changed} files changed under the coverage roots since "
@@ -1852,8 +1856,11 @@ def check_no_banned_words(root: Path, data: dict) -> list[Issue]:
 
     exclude_hits = [0] * len(exclude_entries)
     for rel in tracked:
-        # .ground-truth/ holds the hooks' own records (queue, batch log), not prose.
-        if _under_human_docs(rel) or rel.startswith(".ground-truth/"):
+        # .ground-truth/ holds the hooks' own records (queue, batch log), not
+        # prose; the contract files there are scanned like STATUS.yaml.
+        if _under_human_docs(rel) or (
+            rel.startswith(".ground-truth/") and not gt_store.is_contract_file(rel)
+        ):
             continue
         excluded = False
         for i, (pat, _why) in enumerate(exclude_entries):
@@ -1930,6 +1937,8 @@ def check_stale_live_state(root: Path, data: dict) -> list[Issue]:
     issues: list[Issue] = []
     meta = data.get("meta", {}) or {}
     stale_after_days = meta.get("stale_after_days", _STALE_DEFAULT_DAYS)
+    if gt_store.detect_layout(root) == gt_store.SHARDED:
+        return _stale_observed(data, stale_after_days)
     status_path = root / "STATUS.yaml"
     if not status_path.is_file():
         return issues
@@ -1973,6 +1982,41 @@ def check_stale_live_state(root: Path, data: dict) -> list[Issue]:
         except ValueError:
             continue
         age = (datetime.date.today() - audited).days
+        if age > stale_after_days:
+            issues.append(
+                Issue(
+                    "warn",
+                    cid,
+                    f"live_state block last touched {date_str} ({age}d ago, limit {stale_after_days}d)",
+                )
+            )
+    return issues
+
+
+def _stale_observed(data: dict, stale_after_days: int) -> list[Issue]:
+    """The sharded layout dates a live_state by its own observed: field; git
+    blame would date it to the migration or to any reindent of the shard."""
+    issues: list[Issue] = []
+    for claim in data.get("claims") or []:
+        if not isinstance(claim, dict) or claim.get("kind") != "live_state":
+            continue
+        cid = claim.get("id", "-")
+        date_str = str(claim.get("observed", ""))
+        try:
+            observed = datetime.date.fromisoformat(date_str) if _DATE_RE.match(date_str) else None
+        except ValueError:
+            observed = None
+        if observed is None:
+            issues.append(
+                Issue(
+                    "fail",
+                    cid,
+                    "live_state needs observed: YYYY-MM-DD in a sharded contract, "
+                    f"got {claim.get('observed')!r}",
+                )
+            )
+            continue
+        age = (datetime.date.today() - observed).days
         if age > stale_after_days:
             issues.append(
                 Issue(
@@ -2161,6 +2205,10 @@ def _baseline_status_claims(text: str) -> dict[str, dict] | None:
         return None
     if not isinstance(data, dict):
         return None
+    return _status_claims_of(data)
+
+
+def _status_claims_of(data: dict) -> dict[str, dict] | None:
     claims = data.get("claims")
     if "claims" in data and not isinstance(claims, list):
         # claims: null, a string, a mapping -- parseable YAML, unusable as a
@@ -2188,7 +2236,7 @@ def _rel_status_path(toplevel: Path, root: Path) -> str | None:
 
 
 def _baseline_ref(toplevel: Path, root: Path, mode: str) -> tuple[str | None, str, Issue | None]:
-    """Which commit the current STATUS.yaml is read against: (base, label,
+    """Which commit the current contract is read against: (base, label,
     warn). base is None when there is nothing to compare with -- silently so
     while a repository is still being initialized, with a WARN when a base ref
     was named and did not resolve."""
@@ -2196,9 +2244,12 @@ def _baseline_ref(toplevel: Path, root: Path, mode: str) -> tuple[str | None, st
     if rel_status is None:
         return None, "-", None
     if mode == "sync":
-        tracked = _git_run(toplevel, ["ls-files", "--error-unmatch", "--", rel_status])
-        if tracked.returncode != 0:
-            # Untracked STATUS.yaml: init is still in progress, stay silent.
+        # Either layout's marker in the index counts, so a migration in
+        # progress is still compared against the committed STATUS.yaml.
+        markers = [rel_status, str(Path(rel_status).parent / gt_store.META)]
+        tracked = _git_run(toplevel, ["ls-files", "--", *markers])
+        if tracked.returncode != 0 or not tracked.stdout.strip():
+            # Untracked contract: init is still in progress, stay silent.
             return None, "HEAD", None
         return "HEAD", "HEAD", None
     env_ref = os.environ.get("GT_BASE_REF", "").strip()
@@ -2218,7 +2269,7 @@ def _baseline_ref(toplevel: Path, root: Path, mode: str) -> tuple[str | None, st
 
 
 def _baseline_claims(root: Path, mode: str) -> tuple[dict[str, dict] | None, Issue | None]:
-    """kind: status claims of the baseline STATUS.yaml, keyed by id, plus the
+    """kind: status claims of the baseline contract, keyed by id, plus the
     one Issue to report when there is no usable baseline. Two checks need this
     same view -- the raise guard to compare statuses, assertion density to
     tell a new claim from an old one -- and they must not disagree about which
@@ -2228,21 +2279,28 @@ def _baseline_claims(root: Path, mode: str) -> tuple[dict[str, dict] | None, Iss
         base, label, warn = _baseline_ref(toplevel, root, mode)
         if base is None:
             return None, warn
-        shown = _git_run(toplevel, ["show", f"{base}:{_rel_status_path(toplevel, root)}"])
-        if shown.returncode != 0:
-            # The baseline has no STATUS.yaml at that path: first contract commit.
+        unusable = Issue(
+            "warn",
+            "-",
+            f"status-raise guard skipped: baseline {gt_store.contract_name(root)} at {label} "
+            "does not parse",
+        )
+        try:
+            baseline = gt_store.load_at(toplevel, root, base)
+        except ContractError:
+            return None, unusable
+        if baseline is None:
+            # The baseline has no contract under root: first contract commit.
             return None, None
-        claims = _baseline_status_claims(shown.stdout)
+        claims = _status_claims_of(baseline.data)
         if claims is None:
-            return None, Issue(
-                "warn",
-                "-",
-                f"status-raise guard skipped: baseline STATUS.yaml at {label} does not parse",
-            )
+            return None, unusable
         return claims, None
     except GitUnavailable as exc:
         severity = "fail" if mode == "full" else "warn"
-        return None, Issue(severity, "-", f"could not read baseline STATUS.yaml: {exc}")
+        return None, Issue(
+            severity, "-", f"could not read baseline {gt_store.contract_name(root)}: {exc}"
+        )
 
 
 def _claim_path_changed(claim: dict, changed: set[str]) -> bool:
@@ -2287,7 +2345,7 @@ def _changed_paths(toplevel: Path, root: Path, base: str, mode: str) -> set[str]
     return _rebase_to_root([p for p in raw_changed if p not in drop], toplevel, root)
 
 
-def _status_raise_issues(root: Path, data: dict, mode: str) -> list[Issue]:
+def _status_raise_issues(root: Path, data: dict, mode: str, execute: bool) -> list[Issue]:
     baseline, warn = _baseline_claims(root, mode)
     if baseline is None:
         return [warn] if warn is not None else []
@@ -2328,7 +2386,7 @@ def _status_raise_issues(root: Path, data: dict, mode: str) -> list[Issue]:
             # STATUS.yaml. The check still has to be green for the new status
             # to stand -- full mode proves that here, sync leaves it to the
             # Stop hook enforcer, which runs the check on every turn.
-            if mode == "full":
+            if mode == "full" and execute:
                 ran_ok, msg, skipped = run_claim_check(root, claim)
                 if skipped:
                     issues.append(
@@ -2351,7 +2409,7 @@ def _status_raise_issues(root: Path, data: dict, mode: str) -> list[Issue]:
     return issues
 
 
-def check_status_raise(root: Path, data: dict, mode: str) -> list[Issue]:
+def check_status_raise(root: Path, data: dict, mode: str, execute: bool = True) -> list[Issue]:
     """FAIL when a claim's status is raised without touching what proves it.
 
     Rank order: absent/design-only < stub < partial < implemented. A claim
@@ -2361,10 +2419,10 @@ def check_status_raise(root: Path, data: dict, mode: str) -> list[Issue]:
     and the check still resolves, so nothing else here objects.
     """
     try:
-        return _status_raise_issues(root, data, mode)
+        return _status_raise_issues(root, data, mode, execute)
     except GitUnavailable as exc:
         severity = "fail" if mode == "full" else "warn"
-        return [Issue(severity, "-", f"could not read baseline STATUS.yaml: {exc}")]
+        return [Issue(severity, "-", f"could not read baseline {gt_store.contract_name(root)}: {exc}")]
 
 
 def check_cited_lines(root: Path, data: dict, mode: str) -> list[Issue]:
@@ -2425,19 +2483,20 @@ def check_cited_lines(root: Path, data: dict, mode: str) -> list[Issue]:
     return issues
 
 
-def run(root: Path, mode: str) -> list[Issue]:
+def run(root: Path, mode: str, execute: bool = True) -> list[Issue]:
+    """execute=False reads and compares everything but runs no check or test."""
     data = load_contract(root)
     issues: list[Issue] = []
     issues += check_shape(root, data)
     issues += check_coverage(root, data, mode)
-    issues += check_collectible(root, data, mode)
+    issues += check_collectible(root, data, mode, execute)
     issues += check_links(root, data, mode)
     issues += check_assertion_density(root, data, mode)
     issues += check_debt_coverage(root, data)
     issues += check_debt_resolve(root, data, mode)
     issues += check_canary_roots(root, data, mode)
     issues += check_audit_due(root, data, mode)
-    issues += check_status_raise(root, data, mode)
+    issues += check_status_raise(root, data, mode, execute)
     issues += check_cited_lines(root, data, mode)
     if mode == "full":
         issues += check_no_banned_words(root, data)

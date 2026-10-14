@@ -34,6 +34,7 @@ from gt_lib.paths import load_run  # noqa: E402
 
 TOOLS_FILES = [
     "contract_lib.py",
+    "gt_store.py",
     "verify.py",
     "gt_context.py",
     "blast_radius.py",

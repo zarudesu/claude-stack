@@ -150,6 +150,7 @@ EOF
 setup_guard_repo() {
   setup_repo
   cp "$TEMPLATES_DIR/contract_lib.py" "$REPO/tools/ground_truth/contract_lib.py"
+  cp "$TEMPLATES_DIR/gt_store.py" "$REPO/tools/ground_truth/gt_store.py"
   cp "$TEMPLATES_DIR/gt_session_guard.py" "$REPO/tools/ground_truth/gt_session_guard.py"
   cp "$TEMPLATES_DIR/gt_edit_guard.py" "$REPO/tools/ground_truth/gt_edit_guard.py"
   cp "$TEMPLATES_DIR/ground-truth-edit-guard.sh" "$REPO/.claude/hooks/ground-truth-edit-guard.sh"  # gt-allow: real install path, not prose

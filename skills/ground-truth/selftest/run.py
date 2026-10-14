@@ -595,7 +595,7 @@ def build_fixture() -> None:
     tools_dir = FIXTURE / "tools" / "ground_truth"
     tools_dir.mkdir(parents=True, exist_ok=True)
     (tools_dir / "probes").mkdir(parents=True, exist_ok=True)
-    for name in ("contract_lib.py", "verify.py", "gt_mutation_selfcheck.py", "blast_radius.py"):
+    for name in ("contract_lib.py", "gt_store.py", "verify.py", "gt_mutation_selfcheck.py", "blast_radius.py"):
         shutil.copy(TEMPLATES / name, tools_dir / name)
     shutil.copy(TEMPLATES / "probes" / "example_probe.py", tools_dir / "probes" / "example_probe.py")
 
@@ -1687,7 +1687,7 @@ def edge_case_scenarios() -> bool:
         (sym_repo / "src").symlink_to(Path("real") / "src")
         sym_tools = sym_repo / "tools" / "ground_truth"
         sym_tools.mkdir(parents=True)
-        for name in ("contract_lib.py", "verify.py"):
+        for name in ("contract_lib.py", "gt_store.py", "verify.py"):
             shutil.copy(TEMPLATES / name, sym_tools / name)
         (sym_repo / "STATUS.yaml").write_text(SYMLINK_STATUS_YAML)
         subprocess.run(["git", "init", "-q"], cwd=sym_repo, check=True)
@@ -2976,10 +2976,234 @@ def pending_queue_ci_scenario() -> bool:
     return ok
 
 
+def make_sharded(repo: Path) -> None:
+    """Rewrite repo's STATUS.yaml as the sharded layout: one area per first
+    path segment (global without a path), observed: today on live_state."""
+    import yaml
+
+    data = yaml.safe_load((repo / "STATUS.yaml").read_text())
+    store = repo / ".ground-truth"
+    (store / "areas").mkdir(parents=True, exist_ok=True)
+    areas: dict[str, list] = {}
+    for claim in data["claims"]:
+        paths = [claim["path"]] if isinstance(claim.get("path"), str) else claim.get("path") or []
+        area = paths[0].split("/")[0] if paths else "global"
+        if claim["kind"] == "live_state":
+            claim = {**claim, "observed": TODAY}
+        areas.setdefault(area, []).append(claim)
+
+    def dump(doc: dict) -> str:
+        return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+
+    (store / "contract.yaml").write_text(
+        dump({"schema_version": 2, "meta": data["meta"], "edges": data.get("edges", [])})
+    )
+    (store / "debt.yaml").write_text(dump({"debt": data.get("debt", [])}))
+    for area, claims in areas.items():
+        (store / "areas" / f"{area}.yaml").write_text(dump({"area": area, "claims": claims}))
+    (repo / "STATUS.yaml").unlink()
+
+
+_CONTRACT_REF = re.compile(
+    r"(STATUS\.yaml|\.ground-truth/(?:contract|debt)\.yaml|\.ground-truth/areas/[\w.-]+\.yaml"
+    r"|contract \(\.ground-truth/\))(:\d+)?"
+)
+
+
+def sharded_layout_scenarios() -> bool:
+    """The sharded layout reads, compares against a legacy baseline and reports like STATUS.yaml."""
+    from unittest import mock
+
+    sys.path.insert(0, str(TEMPLATES))
+    import contract_lib
+    import gt_store
+
+    ok = True
+
+    def git(repo: Path, *args: str) -> str:
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+    def norm(issues) -> list:
+        return sorted((i.severity, i.claim_id, _CONTRACT_REF.sub("<contract>", i.message)) for i in issues)
+
+    def in_proc(repo: Path, check, mode: str) -> list:
+        return check(repo, contract_lib.load_contract(repo), mode)
+
+    legacy = SCRATCH_BASE / "layout-legacy"
+    sharded = SCRATCH_BASE / "layout-sharded"
+    migrating = SCRATCH_BASE / "layout-migrating"
+    shutil.copytree(FIXTURE, legacy, symlinks=True)
+    first_sha = git(legacy, "rev-parse", "HEAD")
+    (legacy / "docs").mkdir(exist_ok=True)
+    (legacy / "docs" / "refs.md").write_text(
+        "Known: claim:alpha_greeting, STATUS.yaml#handlers_http.\n"
+        "Unknown: claim:nope_claim, STATUS.yaml#nope_status.\n"
+    )
+    status = legacy / "STATUS.yaml"
+    status.write_text(status.read_text().replace(
+        'handle()."', 'handle(); we leverage it."', 1))  # gt-allow: fault-injection payload, both layouts must report it
+    git(legacy, "add", "STATUS.yaml", "docs/refs.md")
+    git(legacy, "commit", "-q", "-m", "plant references")
+    legacy_sha = git(legacy, "rev-parse", "HEAD")
+    shutil.copytree(legacy, sharded, symlinks=True)
+    shutil.copytree(legacy, migrating, symlinks=True)
+    make_sharded(sharded)
+    git(sharded, "add", "-A", "STATUS.yaml", ".ground-truth")
+    git(sharded, "commit", "-q", "-m", "shard the contract")
+    areas = sharded / ".ground-truth" / "areas"
+
+    # (1) Same findings in both layouts once contract file names and lines are normalized.
+    with mock.patch.dict(os.environ, {"GT_BASE_REF": legacy_sha}):
+        for mode in ("sync", "full"):
+            a = norm(contract_lib.run(legacy, mode, execute=False))
+            b = norm(contract_lib.run(sharded, mode, execute=False))
+            ok &= record(
+                f"layout: {mode} findings on the sharded layout equal legacy after normalization",
+                a == b and bool(a) and (mode == "sync" or any("leverage" in m for _, _, m in a)),  # gt-allow: expected match text
+                f"legacy {a}\nsharded {b}",
+            )
+        full = contract_lib.run(sharded, "full", execute=False)
+
+    # (7) Both reference spellings resolve; unknown ids fail.
+    msgs = [i.message for i in full if i.severity == "fail" and "reference to unknown claim" in i.message]
+    ok &= record(
+        "layout: claim:<id> and STATUS.yaml#<id> cross-references checked on the sharded layout",
+        sorted(msgs) == ["docs/refs.md: reference to unknown claim STATUS.yaml#nope_status",
+                         "docs/refs.md: reference to unknown claim claim:nope_claim"],
+        str(msgs),
+    )
+
+    # (2) Both layouts at once is refused.
+    with added_file(sharded / "STATUS.yaml", git(sharded, "show", f"{legacy_sha}:STATUS.yaml")):
+        cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
+        ok &= record(
+            "layout: STATUS.yaml next to .ground-truth/contract.yaml -> exit 3",
+            cp.returncode == 3 and "finish `gt migrate`" in out(cp),
+            out(cp),
+        )
+
+    # (3) A claim id in two shards fails and names both files.
+    services = (areas / "services.yaml").read_text()
+    alpha = services[services.index("- id: alpha_greeting"):services.index("- id: beta_worker_stub")]
+    with added_file(areas / "extra.yaml", "area: extra\nclaims:\n" + alpha):
+        cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
+        ok &= record(
+            "layout: duplicate claim id across shards -> FAIL naming both files",
+            cp.returncode == 1
+            and "duplicate claim id in .ground-truth/areas/extra.yaml:3 and "
+                ".ground-truth/areas/services.yaml:" in out(cp),
+            out(cp),
+        )
+
+    # (4) Shard rules: area must match the file stem and name pattern; unknown keys refuse to load.
+    with patched(areas / "handlers.yaml", "area: handlers\n", "area: web\n"):
+        cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
+        ok &= record(
+            "layout: area different from the shard file name -> FAIL",
+            cp.returncode == 1 and "area 'web' does not match the file name 'handlers'" in out(cp),
+            out(cp),
+        )
+    with added_file(areas / "Bad.yaml", "area: Bad\nclaims: []\n"):
+        issues = in_proc(sharded, lambda r, d, m: contract_lib.check_shape(r, d), "sync")
+        ok &= record(
+            "layout: shard file name outside [a-z0-9._-] -> FAIL",
+            any(i.severity == "fail" and "Bad.yaml: area file name must match" in i.message for i in issues),
+            str(issues),
+        )
+    with patched(areas / "handlers.yaml", "area: handlers\n", "area: handlers\nowner: x\n"):
+        cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
+        ok &= record(
+            "layout: unknown top-level key in a shard -> exit 3",
+            cp.returncode == 3 and "unknown top-level keys ['owner']" in out(cp),
+            out(cp),
+        )
+
+    # (5) Raise against a legacy baseline: committed (full, HEAD~1) and mid-migration (sync, HEAD).
+    raise_msg = "status raised stub -> implemented but check target(s) tests/test_beta.py"
+    with mock.patch.dict(os.environ), patched(areas / "services.yaml", "  status: stub\n", "  status: implemented\n"):
+        os.environ.pop("GT_BASE_REF", None)
+        issues = in_proc(sharded, contract_lib.check_status_raise, "full")
+        ok &= record(
+            "layout: full raise on the sharded worktree over a legacy HEAD~1 without check change -> FAIL",
+            any(i.severity == "fail" and raise_msg in i.message and "since HEAD~1" in i.message for i in issues),
+            str(issues),
+        )
+    make_sharded(migrating)
+    with patched(migrating / ".ground-truth/areas/services.yaml", "  status: stub\n", "  status: implemented\n"):
+        issues = in_proc(migrating, contract_lib.check_status_raise, "sync")
+        ok &= record(
+            "layout: sync raise on an uncommitted sharded worktree over a legacy HEAD -> FAIL",
+            any(i.severity == "fail" and raise_msg in i.message for i in issues),
+            str(issues),
+        )
+
+    # (6) Debt closed on paper in debt.yaml, baseline read from the sharded HEAD.
+    with patched(sharded / ".ground-truth/debt.yaml", "  state: open\n", "  state: resolved\n"):
+        issues = in_proc(sharded, contract_lib.check_debt_resolve, "sync")
+        ok &= record(
+            "layout: debt resolved without proof in debt.yaml -> FAIL",
+            any(i.severity == "fail" and "debt debt_beta_stub resolved without proof" in i.message for i in issues),
+            str(issues),
+        )
+
+    # (8) Contract files are not code churn: only docs/refs.md counts, in either layout.
+    for repo in (legacy, sharded):
+        data = contract_lib.load_contract(repo)
+        data["meta"]["last_audited_commit"] = first_sha
+        data["meta"]["coverage"]["roots"] = ["."]
+        with mock.patch.object(contract_lib, "_AUDIT_MAX_FILES", 0):
+            issues = contract_lib.check_audit_due(repo, data, "full")
+        ok &= record(
+            f"layout: audit-due on {repo.name} counts no contract files",
+            any(f"1 files changed under the coverage roots since {first_sha}" in i.message for i in issues),
+            str(issues),
+        )
+
+    # (9) live_state freshness comes from observed: in the sharded layout.
+    global_shard = areas / "global.yaml"
+    with patched(global_shard, f"  observed: '{TODAY}'\n", ""):
+        issues = contract_lib.check_stale_live_state(sharded, contract_lib.load_contract(sharded))
+        ok &= record(
+            "layout: live_state without observed in the sharded layout -> FAIL",
+            [(i.severity, i.claim_id) for i in issues] == [("fail", "alpha_health_live")],
+            str(issues),
+        )
+    with patched(global_shard, f"  observed: '{TODAY}'\n", "  observed: '2000-01-01'\n"):
+        issues = contract_lib.check_stale_live_state(sharded, contract_lib.load_contract(sharded))
+        ok &= record(
+            "layout: live_state observed long ago -> WARN",
+            [(i.severity, i.claim_id) for i in issues] == [("warn", "alpha_health_live")]
+            and "last touched 2000-01-01" in issues[0].message,
+            str(issues),
+        )
+
+    # Store helpers: load_at, refs, write_meta.
+    at_head = gt_store.load_at(sharded, sharded, "HEAD")
+    at_base = gt_store.load_at(sharded, sharded, "HEAD~1")
+    refs = ["claim:x_y", "a/b.py:3-5 «q»", "a/b.py::f", "a/b.py"]
+    gt_store.write_meta(sharded, {"last_audited_commit": legacy_sha})
+    meta_diff = git(sharded, "diff", "--unified=0", ".ground-truth/contract.yaml")
+    git(sharded, "checkout", "-q", ".ground-truth/contract.yaml")
+    ok &= record(
+        "layout: store reads both layouts at a rev, round-trips refs and writes one meta line",
+        at_head.data == contract_lib.load_contract(sharded)
+        and sorted(c["id"] for c in at_head.data["claims"]) == sorted(c["id"] for c in at_base.data["claims"])
+        and at_head.area_of_claim["alpha_greeting"] == "services" and not at_base.area_of_claim
+        and at_base.origin[("claim", "alpha_greeting")][0] == "STATUS.yaml"
+        and [gt_store.format_ref(gt_store.parse_ref(r)) for r in refs] == refs
+        and gt_store.parse_ref("STATUS.yaml#x_y") == {"claim": "x_y"}
+        and [line for line in meta_diff.splitlines() if line[:1] == "+" and line[:3] != "+++"]
+        == [f'+  last_audited_commit: "{legacy_sha}"'],
+        meta_diff,
+    )
+    return ok
+
+
 def main() -> int:
     build_fixture()
     ok = True
     ok &= happy_path()
+    ok &= sharded_layout_scenarios()
     ok &= pending_queue_ci_scenario()
     ok &= fault_scenarios()
     ok &= banned_words_exclude_scenarios()

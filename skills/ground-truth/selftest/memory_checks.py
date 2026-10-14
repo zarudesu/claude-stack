@@ -543,6 +543,7 @@ class PendingQueueChecks(unittest.TestCase):
         self.hook("ground-truth-sync-check.sh")
         tools = self.repo / "tools/ground_truth"
         shutil.copyfile(SKILL / "templates/verify.py", tools / "verify.py")
+        shutil.copyfile(SKILL / "templates/gt_store.py", tools / "gt_store.py")
         (tools / "contract_lib.py").write_text(
             "class ContractError(Exception):\n    pass\n\n\ndef run(root, mode):\n    raise RuntimeError('boom')\n")
         proc = self.hook("ground-truth-sync-check.sh")
@@ -577,7 +578,7 @@ class PendingQueueChecks(unittest.TestCase):
         repo = Path(self.temp.name) / "parse"
         tools = repo / "tools/ground_truth"
         tools.mkdir(parents=True)
-        for name in ("verify.py", "contract_lib.py"):
+        for name in ("verify.py", "contract_lib.py", "gt_store.py"):
             shutil.copyfile(SKILL / "templates" / name, tools / name)
         (repo / "app dir").mkdir()
         (repo / "app dir/core.py").write_text("def price():\n    return 1\n")
@@ -680,7 +681,7 @@ class AutoRepairChecks(unittest.TestCase):
         self.repo = Path(self.temp.name)
         tools = self.repo / "tools/ground_truth"
         tools.mkdir(parents=True)
-        for name in ("verify.py", "contract_lib.py", "gt_pending.py", "remap_line_refs.py"):
+        for name in ("verify.py", "contract_lib.py", "gt_store.py", "gt_pending.py", "remap_line_refs.py"):
             shutil.copyfile(SKILL / "templates" / name, tools / name)
         (self.repo / "src").mkdir()
         self.code = self.repo / "src/core.py"
