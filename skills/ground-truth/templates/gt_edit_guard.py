@@ -312,7 +312,8 @@ _BASH_WRITE_RE = re.compile(
 # Tokens split on whitespace and the shell separators | ; & -- good enough
 # to pull candidate paths out of a command line without a real parser.
 _BASH_TOKEN_RE = re.compile(r"[^\s|;&]+")
-_RM_RE = re.compile(r"\s*(?:git\s+)?rm(?:\s+-[-\w]*)*((?:\s+[^\s|;&<>-][^\s|;&<>]*)+)\s*")
+# Plain words only: no $, backquote, parentheses, backslash or newline can ride along.
+_RM_RE = re.compile(r"[ \t]*(?:git[ \t]+)?rm(?:[ \t]+-[-\w]*)*((?:[ \t]+[\w./*'\"][\w./*'\"-]*)+)[ \t]*")
 
 
 def _bash_candidate_rels(command: str, cwd: str, root: Path, cfg: dict) -> list[str]:

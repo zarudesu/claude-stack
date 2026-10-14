@@ -1190,6 +1190,20 @@ else
   fail "SH7: both layouts, strict guard lets git rm / rm of a contract through, blocks edits (rc=$rc rc2=$rc2 rc3=$rc3 rc4=$rc4 out=$out out2=$out2 out3=$out3 out4=$out4)"
 fi
 
+# Case SH8: both layouts, strict edit guard -> an rm of a contract path that
+# carries a command substitution, or a second line, stays blocked
+rcs=""
+for cmd in 'rm .ground-truth/areas/$(touch app/x).yaml' 'rm .ground-truth/areas/`id`.yaml' \
+           'rm .ground-truth/areas/${IFS}.yaml' 'git rm STATUS.yaml\n.ground-truth/contract.yaml'; do
+  run_bash_hook "$cmd" >/dev/null 2>&1; rcs="$rcs $?"
+done
+run_bash_hook "git rm -r .ground-truth" >/dev/null 2>&1; rc=$?
+if [ "$rcs" = " 2 2 2 2" ] && [ $rc -eq 0 ]; then
+  pass "SH8: both layouts, rm of a contract path with \$( \` \${ or a newline stays blocked"
+else
+  fail "SH8: both layouts, rm of a contract path with \$( \` \${ or a newline stays blocked (rcs=$rcs rc=$rc)"
+fi
+
 # ---------------------------------------------------------------------
 # Broken environment: an interpreter without PyYAML (-S drops site-packages).
 # Blocking hooks fail closed and name the doctor; advisory ones only warn.
