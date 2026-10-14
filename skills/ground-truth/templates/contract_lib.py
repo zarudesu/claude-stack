@@ -1675,10 +1675,16 @@ def check_removed_entries(root: Path, data: dict, mode: str) -> list[Issue]:
         return []
     debt = {d.get("id") for d in data.get("debt") or [] if isinstance(d, dict)}
     claims = {c.get("id") for c in data.get("claims") or [] if isinstance(c, dict)}
-    log = root / gt_store.DIR / "pending-log.yaml"
-    removed = {cid for block in (yaml.safe_load(log.read_text()) or [] if log.is_file() else [])
-               for cid in block.get("removed") or []}
-    issues = [Issue("fail", d["id"], f"open debt {d['id']} removed since {label}; fix: keep it and close it "
+    log = f"{gt_store.DIR}/pending-log.yaml"
+    issues, removed = [], set()
+    try:
+        blocks = yaml.safe_load((root / log).read_text()) or [] if (root / log).is_file() else []
+        if not isinstance(blocks, list) or not all(isinstance(b, dict) for b in blocks):
+            raise ValueError("not a list of mappings")
+        removed = {cid for block in blocks for cid in block.get("removed") or []}
+    except (OSError, yaml.YAMLError, ValueError, TypeError) as exc:
+        issues.append(Issue("fail", "-", f"{log}: {' '.join(str(exc).split())}; fix: git checkout -- {log}"))
+    issues += [Issue("fail", d["id"], f"open debt {d['id']} removed since {label}; fix: keep it and close it "
                     "with state: resolved and proof")
               for d in baseline.data.get("debt") or []
               if isinstance(d, dict) and d.get("state") == "open" and isinstance(d.get("id"), str) and d["id"] not in debt]

@@ -3117,6 +3117,17 @@ def sharded_layout_scenarios() -> bool:
         str(msgs),
     )
 
+    # (7c) A broken pending-log.yaml is one FAIL; the rest of the full run still reports.
+    for text in ("- removed: [a\n", "removed: [alpha_greeting]\n"):
+        with added_file(sharded / ".ground-truth/pending-log.yaml", text):
+            cp = run(["tools/ground_truth/verify.py", "--mode=full"], sharded)
+        ok &= record(
+            f"layout: pending-log.yaml {text.strip()!r} -> one FAIL naming it, other findings kept",
+            cp.returncode == 1 and "[FAIL] - : .ground-truth/pending-log.yaml: " in out(cp)
+            and "leverage" in out(cp),  # gt-allow: expected match text
+            out(cp)[-1500:],
+        )
+
     # (2) Both layouts at once is refused.
     with added_file(sharded / "STATUS.yaml", git(sharded, "show", f"{legacy_sha}:STATUS.yaml")):
         cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
