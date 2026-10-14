@@ -312,6 +312,7 @@ _BASH_WRITE_RE = re.compile(
 # Tokens split on whitespace and the shell separators | ; & -- good enough
 # to pull candidate paths out of a command line without a real parser.
 _BASH_TOKEN_RE = re.compile(r"[^\s|;&]+")
+_RM_RE = re.compile(r"\s*(?:git\s+)?rm(?:\s+-[-\w]*)*((?:\s+[^\s|;&<>-][^\s|;&<>]*)+)\s*")
 
 
 def _bash_candidate_rels(command: str, cwd: str, root: Path, cfg: dict) -> list[str]:
@@ -336,6 +337,21 @@ def _bash_candidate_rels(command: str, cwd: str, root: Path, cfg: dict) -> list[
         if (root / rel).is_file() or under_roots(rel, cfg.get("roots"), cfg.get("exclude")):
             rels[rel] = None
     return list(rels)
+
+
+def _removes_contract(command: str, cwd: str, root: Path) -> bool:
+    """`rm` or `git rm` of STATUS.yaml or .ground-truth only: the way out of a mixed layout."""
+    m = _RM_RE.fullmatch(command)
+    if not m:
+        return False
+    for token in m[1].split():
+        try:
+            rel = (Path(cwd) / token.strip("'\"")).resolve().relative_to(root.resolve()).as_posix()
+        except (ValueError, OSError):
+            return False
+        if rel != gt_store.DIR and not gt_store.is_contract_file(rel):
+            return False
+    return True
 
 
 def _leading_checks(root: Path, git_dir: Path, rel: str, sid: str, via: str) -> int | None:
@@ -402,7 +418,13 @@ def _run_bash(payload: dict, tool_input: dict, cwd: str) -> int:
     if root is None:
         return 0
 
-    if not gt_store.contract_files(root) or not (root / "tools" / "ground_truth").is_dir():
+    try:
+        files = gt_store.contract_files(root)
+    except gt_store.MixedLayoutError:
+        if _removes_contract(command, cwd, root):
+            return 0
+        raise
+    if not files or not (root / "tools" / "ground_truth").is_dir():
         return 0
 
     try:

@@ -1153,7 +1153,7 @@ export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
 setup_guard_repo
 mkdir -p "$REPO/.ground-truth"
 sed -n '/^claims:/,$!p' "$REPO/STATUS.yaml" | sed 's/^schema_version: 1$/schema_version: 2/' > "$REPO/.ground-truth/contract.yaml"
-mixed="both STATUS.yaml and .ground-truth/contract.yaml exist; run \`git checkout\` or finish \`gt migrate\`"
+mixed="both STATUS.yaml and .ground-truth/contract.yaml exist; \`git rm STATUS.yaml\` to keep .ground-truth/, or \`git rm -r .ground-truth\` to keep STATUS.yaml"
 out=$(run_stop_hook false 2>&1); rc=$?
 out2=$(run_edit_hook "$REPO/app/pricing.py" 2>&1); rc2=$?
 out3=$(run_session_start_hook); rc3=$?
@@ -1163,6 +1163,19 @@ if [ $rc -eq 2 ] && [ "$out" = "ground-truth: $mixed" ] \
   pass "SH6: both layouts -> Stop exit 2, edit guard blocks, SessionStart warns"
 else
   fail "SH6: both layouts -> Stop exit 2, edit guard blocks, SessionStart warns (rc=$rc rc2=$rc2 rc3=$rc3 out=$out out2=$out2 out3=$out3)"
+fi
+
+# Case SH7: both layouts, strict edit guard -> removing either contract is
+# the way out and passes; editing STATUS.yaml or another file stays blocked
+out=$(run_bash_hook "git rm STATUS.yaml" 2>&1); rc=$?
+out2=$(run_bash_hook "rm -r .ground-truth" 2>&1); rc2=$?
+out3=$(run_edit_hook "$REPO/STATUS.yaml" 2>&1); rc3=$?
+out4=$(run_bash_hook "rm app/pricing.py" 2>&1); rc4=$?
+if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -eq 2 ] && [ $rc4 -eq 2 ] \
+   && printf '%s' "$out3" | grep -qF "\`git rm STATUS.yaml\` to keep .ground-truth/, or \`git rm -r .ground-truth\` to keep STATUS.yaml"; then
+  pass "SH7: both layouts, strict guard lets git rm / rm of a contract through, blocks edits"
+else
+  fail "SH7: both layouts, strict guard lets git rm / rm of a contract through, blocks edits (rc=$rc rc2=$rc2 rc3=$rc3 rc4=$rc4 out=$out out2=$out2 out3=$out3 out4=$out4)"
 fi
 
 # ---------------------------------------------------------------------

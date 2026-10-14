@@ -63,7 +63,7 @@ def _files(exists, areas: list[str]) -> list[str]:
     legacy, sharded = exists(STATUS), exists(META)
     if legacy and sharded:
         raise MixedLayoutError(
-            f"both {STATUS} and {META} exist; run `git checkout` or finish `gt migrate`"
+            f"both {STATUS} and {META} exist; `git rm {STATUS}` to keep {DIR}/, or `git rm -r {DIR}` to keep {STATUS}"
         )
     if legacy:
         return [STATUS]

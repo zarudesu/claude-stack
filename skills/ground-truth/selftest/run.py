@@ -3122,7 +3122,7 @@ def sharded_layout_scenarios() -> bool:
         cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
         ok &= record(
             "layout: STATUS.yaml next to .ground-truth/contract.yaml -> exit 3",
-            cp.returncode == 3 and "finish `gt migrate`" in out(cp),
+            cp.returncode == 3 and "`git rm STATUS.yaml` to keep .ground-truth/" in out(cp),
             out(cp),
         )
 
@@ -3338,7 +3338,7 @@ def sharded_guard_scenarios() -> bool:
     with added_file(repo / "STATUS.yaml", "schema_version: 1\nclaims: []\n"):
         cp = run([str(TEMPLATES / "blast_radius.py"), "services/gamma_mod.py", "--root", str(repo)], repo)
     ok &= record("sharded: blast_radius with STATUS.yaml next to contract.yaml -> exit 3, no traceback",
-                 cp.returncode == 3 and "finish `gt migrate`" in cp.stderr and "Traceback" not in out(cp), out(cp))
+                 cp.returncode == 3 and "`git rm STATUS.yaml` to keep .ground-truth/" in cp.stderr and "Traceback" not in out(cp), out(cp))
     return ok
 
 
@@ -3449,7 +3449,7 @@ def migrate_scenarios() -> bool:
     with added_file(blocking / "STATUS.yaml", "schema_version: 1\nclaims: []\n"):
         cp = migrate(blocking, "--write")
     ok &= record("migrate: STATUS.yaml next to contract.yaml (mixed) -> rc 3, nothing merged",
-                 cp.returncode == 3 and "finish `gt migrate`" in cp.stderr, out(cp))
+                 cp.returncode == 3 and "`git rm STATUS.yaml` to keep .ground-truth/" in cp.stderr, out(cp))
     migrate(twin, "--write")
     ok &= record("migrate: two runs on the same input write the same bytes",
                  shards(twin) == shards(blocking) and len(shards(blocking)) > 3, sorted(shards(twin)))

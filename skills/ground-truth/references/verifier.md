@@ -173,7 +173,7 @@ class Issue:
 
 - контракта нет по вычисленному `root` (`STATUS.yaml not found at …`);
 - `yaml.safe_load` любого файла контракта бросает исключение (битый YAML — незакрытая кавычка, неверный отступ);
-- смешанная раскладка — есть и `STATUS.yaml`, и `.ground-truth/contract.yaml` (`MixedLayoutError`: `both STATUS.yaml and .ground-truth/contract.yaml exist; run `git checkout` or finish `gt migrate``).
+- смешанная раскладка — есть и `STATUS.yaml`, и `.ground-truth/contract.yaml` (`MixedLayoutError`: ``both STATUS.yaml and .ground-truth/contract.yaml exist; `git rm STATUS.yaml` to keep .ground-truth/, or `git rm -r .ground-truth` to keep STATUS.yaml``). Edit guard в этом состоянии пропускает только `rm`/`git rm` самих контрактных файлов.
 
 `verify.py` в этих случаях печатает причину и завершается **exit 3**, не 1 — это отличие принципиально: `1` значит «контракт синтаксически валиден, но не сходится с кодом» (обычная работа верификатора), `3` значит «сам контракт сломан как файл» — сигнал для человека читать `git diff` контракта, а не для агента чинить код.
 
