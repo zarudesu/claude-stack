@@ -3601,6 +3601,20 @@ def migrate_scenarios() -> bool:
     ok &= record("migrate: edit-by-hand list skips the CI job and tools/ground_truth/**, keeps the rest",
                  by_hand.endswith("edit by hand: docs/notes.md, tests/test_status_contract.py"), out(cp))
 
+    # (8) A .py probe reads STATUS.yaml only through a string literal outside docstrings; other files by text.
+    named = prepare(SCRATCH_BASE / "migrate-named", files={
+        "tools/ground_truth/probes/doc_only.py": (
+            '"""Backs claim x in STATUS.yaml."""\n# see STATUS.yaml\n\n\n'
+            'def check():\n    """Mirrors STATUS.yaml."""\n    return 0\n'),
+        "tools/ground_truth/probes/reader.py": 'from pathlib import Path\nSTATUS_PATH = Path(".") / "STATUS.yaml"\n',
+        "tools/ground_truth/probes/reader.sh": "#!/bin/sh\ngrep -q x STATUS.yaml\n"})
+    cp = migrate(named, "--write")
+    listed = cp.stderr.split("would break once it is gone:")[-1]
+    ok &= record("migrate: probe naming STATUS.yaml only in docstrings/comments is not a reader; "
+                 "a string literal in .py and a .sh by text are -> --write rc 3",
+                 cp.returncode == 3 and "reader.py" in listed and "reader.sh" in listed
+                 and "doc_only.py" not in cp.stdout + cp.stderr, out(cp))
+
     # (6) Staging: a contract without debt and an edited model.yaml are staged whole; a failed git add is an error.
     nodebt = prepare(SCRATCH_BASE / "migrate-nodebt", lambda t: t[:t.index("\ndebt:\n") + 1])
     cp = migrate(nodebt, "--write")

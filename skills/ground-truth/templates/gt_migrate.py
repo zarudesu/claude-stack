@@ -24,6 +24,7 @@ a repo probe that still names STATUS.yaml (--write only), git add failed.
 from __future__ import annotations
 
 import argparse
+import ast
 import collections
 import datetime
 import os
@@ -317,6 +318,22 @@ def fresh_areas(model_root: Path, areas: list[str], warns: list[str]) -> list[st
     return fresh
 
 
+def reads_status(path: Path) -> bool:
+    """A .py file reads STATUS.yaml if a string literal other than a docstring names it;
+    any other file, or a .py that does not parse, by its text."""
+    if path.suffix != ".py":
+        return True
+    try:
+        tree = ast.parse(path.read_bytes())
+    except SyntaxError:
+        return True
+    docs = {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.body and isinstance(n.body[0], ast.Expr)}
+    return any(isinstance(n, ast.Constant) and isinstance(n.value, str) and STATUS in n.value
+               and id(n) not in docs for n in ast.walk(tree))
+
+
 def report(root: Path, plan: dict, skill: Path | None = None) -> list[str]:
     """Print the plan; return the repo probes that still name STATUS.yaml."""
     groups, sources = plan["groups"], plan["sources"]
@@ -349,6 +366,7 @@ def report(root: Path, plan: dict, skill: Path | None = None) -> list[str]:
         p for p, _, text in (line.split(":", 2) for line in listed.stdout.splitlines())
         if p != STATUS and (p.startswith("tools/ground_truth/probes/") or not p.startswith("tools/ground_truth/"))
         and "remap_line_refs.py" not in text and "citations in STATUS.yaml that this diff shifted" not in text))
+    by_hand = [p for p in by_hand if not p.startswith("tools/ground_truth/probes/") or reads_status(root / p)]
     if skill:
         # A file shipped by the skill as is already reads either layout.
         shipped = {t.read_bytes() for t in (skill / "templates").rglob("*") if t.is_file()}
