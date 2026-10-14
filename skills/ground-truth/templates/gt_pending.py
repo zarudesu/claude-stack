@@ -181,8 +181,13 @@ def _dump(data, limits, entries):
     return yaml.safe_dump({**head, "pending": pending}, sort_keys=False, allow_unicode=True)
 
 
+def _today():
+    """GT_TODAY=YYYY-MM-DD stands in for the date, so a check can run as another day."""
+    return date.fromisoformat(os.environ["GT_TODAY"]) if os.environ.get("GT_TODAY") else date.today()
+
+
 def _mark(entries, limits, sessions):
-    today = date.today()
+    today = _today()
     for key, entry in entries.items():
         reason = escalation(entry, limits, today, len(sessions.get(key, [])))
         entry["escalated"] = reason is not None
@@ -218,7 +223,7 @@ def record(root, findings, classes, session, unjudged=lambda key: False):
         data, limits, entries, before = load(root)
         ignored = {c for c, v in (data.get("classes") or {}).items() if v == "ignore"}
         closed = data["closed"] = data.get("closed") or {}
-        first = {"date": date.today().isoformat(), "rev": _git(root, "rev-parse", "--short", "HEAD").strip() or "-"}
+        first = {"date": _today().isoformat(), "rev": _git(root, "rev-parse", "--short", "HEAD").strip() or "-"}
         added, seen = [], set()
         for cls, obj, area, evidence in findings:
             if cls in ignored:
@@ -338,15 +343,15 @@ def _age(entry, today):
 def summary(root):
     _, limits, entries, _ = load(root, local=True)
     if entries:
-        today = date.today()
-        oldest = max(_age(e, today) for e in entries.values())
+        # Absolute dates: the line reads the same on every day until the queue changes.
+        oldest = min(date.fromisoformat(str(e["first_seen"]["date"])) for e in entries.values())
         escalated = sum(e["escalated"] for e in entries.values())
         log = _log(root)
-        idle = (today - date.fromisoformat(str(log[-1]["date"]))).days if log else oldest
+        last = date.fromisoformat(str(log[-1]["date"])) if log else oldest
         due = [reason for reason, hit in ((f"queue at {len(entries)}/{limits['total']}", len(entries) >= 0.7 * limits["total"]),
-                                          (f"no batch review for {idle}d", idle > 3.5),
+                                          (f"no batch review since {last}", (_today() - last).days > 3.5),
                                           (f"{escalated} escalated", escalated)) if hit]
-        print(f"ground-truth pending {len(entries)}/{limits['total']}, oldest {oldest}d, escalated {escalated}"
+        print(f"ground-truth pending {len(entries)}/{limits['total']}, oldest {oldest}, escalated {escalated}"
               + (f"; batch review due: {', '.join(due)}" if due else ""))
 
 
@@ -392,7 +397,7 @@ def _batch(root, verdicts_file):
         print("\n".join(errors), file=sys.stderr)
         return 1
     log = _log(root)
-    today, before = date.today(), set(entries)
+    today, before = _today(), set(entries)
     previous = set(log[-1]["keys"]) if log else set()
     verdicts, closed, noise, carried = Counter(), Counter(), Counter(), 0
     escalated = Counter(e["class"] for e in entries.values() if e["escalated"])

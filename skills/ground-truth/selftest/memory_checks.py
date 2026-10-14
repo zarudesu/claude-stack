@@ -495,13 +495,14 @@ class PendingQueueChecks(unittest.TestCase):
     def warn(self, *paths):
         self.warns.write_text("".join(f"[WARN] - : {p} is not covered by any claim\n" for p in paths))
 
-    def hook(self, name, session="s1", touch="src/a.py"):
+    def hook(self, name, session="s1", touch="src/a.py", today=None):
         if touch:
             (self.repo / touch).write_text(f"{session}\n")
         return subprocess.run(["bash", str(SKILL / "templates" / name)],
                               input=json.dumps({"cwd": str(self.repo), "session_id": session}),
                               text=True, capture_output=True,
-                              env={**os.environ, "GT_PYTHON": sys.executable, "GT_FAKE_WARNS": str(self.warns)})
+                              env={**os.environ, "GT_PYTHON": sys.executable, "GT_FAKE_WARNS": str(self.warns),
+                                   **({"GT_TODAY": today} if today else {})})
 
     def entries(self):
         return gt_pending.load(self.repo)[2]
@@ -683,8 +684,14 @@ class PendingQueueChecks(unittest.TestCase):
         self.warn("src/a.py", "docs/a.md")
         self.hook("ground-truth-sync-check.sh")
         first = self.hook("ground-truth-session-start.sh", touch=None).stdout
-        self.assertTrue(first.startswith("ground-truth pending 2/30, oldest 0d, escalated 0\n"), first)
+        # The static card comes first; the queue line carries a date, not an age.
+        today = gt_pending.date.today()
+        self.assertTrue(first.startswith("## ground-truth contract active"), first)
+        self.assertIn(f"\nground-truth pending 2/30, oldest {today.isoformat()}, escalated 0\n", first)
+        self.assertLess(first.index("Details: .claude/rules"), first.index("ground-truth pending"))
         self.assertEqual(self.hook("ground-truth-session-start.sh", touch=None).stdout, first)
+        tomorrow = today.fromordinal(today.toordinal() + 1).isoformat()
+        self.assertEqual(self.hook("ground-truth-session-start.sh", touch=None, today=tomorrow).stdout, first)
 
 
 class AutoRepairChecks(unittest.TestCase):
@@ -1050,7 +1057,8 @@ class BatchReviewChecks(unittest.TestCase):
 
     def test_batch_due_on_fill_log_age_and_escalation(self):
         self.seed("uncovered:src/a.py")
-        self.assertEqual(self.out("summary"), "ground-truth pending 1/30, oldest 0d, escalated 0\n")
+        self.assertEqual(self.out("summary"),
+                         f"ground-truth pending 1/30, oldest {gt_pending.date.today()}, escalated 0\n")
         self.edit(limits={**gt_pending.LIMITS, "total": 1})
         self.assertIn("; batch review due: queue at 1/1\n", self.out("summary"))
         self.edit(limits=gt_pending.LIMITS)
@@ -1058,10 +1066,10 @@ class BatchReviewChecks(unittest.TestCase):
         self.assertNotIn("due", self.out("summary"))
         log = self.repo / gt_pending.LOG
         log.write_text(log.read_text().replace(gt_pending.date.today().isoformat(), "2000-01-01"))
-        self.assertRegex(self.out("summary"), r"; batch review due: no batch review for \d+d\n")
+        self.assertIn("; batch review due: no batch review since 2000-01-01\n", self.out("summary"))
         log.unlink()
         self.edit("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
-        self.assertRegex(self.out("summary"), r"; batch review due: no batch review for \d+d, 1 escalated\n")
+        self.assertIn("; batch review due: no batch review since 2000-01-01, 1 escalated\n", self.out("summary"))
 
 
 

@@ -71,12 +71,18 @@ if ! env_err=$("$py" -c 'import yaml' 2>&1); then
   echo "## ground-truth: environment broken: $(printf '%s\n' "$env_err" | tail -1); run: python3 tools/ground_truth/gt_doctor.py"
   exit 0
 fi
-[ -f "$memory" ] && "$py" "$memory" hook --event start
-# One line about deferred drift, only when the queue is not empty.
-pending="$root/tools/ground_truth/gt_pending.py"
-[ -f "$pending" ] && "$py" "$pending" --root "$root" summary
-has_contract || exit 0
-[ -f "$root/tools/ground_truth/verify.py" ] || exit 0
+# Lines that change with the repo state are printed after the static card,
+# sorted, with absolute dates, so the start of the context keeps the same
+# bytes from session to session while nothing changes.
+dyn=$(
+  [ -f "$memory" ] && "$py" "$memory" hook --event start
+  # One line about deferred drift, only when the queue is not empty.
+  pending="$root/tools/ground_truth/gt_pending.py"
+  [ -f "$pending" ] && "$py" "$pending" --root "$root" summary
+)
+show_dyn() { [ -n "$dyn" ] && printf '%s\n' "$dyn" | LC_ALL=C sort; }
+has_contract || { show_dyn; exit 0; }
+[ -f "$root/tools/ground_truth/verify.py" ] || { show_dyn; exit 0; }
 
 # A restart after compaction or a crash resets the session's acks and red
 # streak on purpose: the covered-file gate should not trust a blast_radius
@@ -104,6 +110,7 @@ except Exception:
     print('advisory')
 " "$root" 2>/dev/null); then
   echo "## ground-truth: $mode"
+  show_dyn
   exit 0
 fi
 [ -z "$mode" ] && mode=advisory
@@ -115,6 +122,7 @@ cat <<CARDEOF
 - Skipped or incomplete checks are not proof. Repeated failure: diagnose and report, do not weaken the check.
 - Pre-edit gates are opt-in (GT_STRICT_EDIT_GUARD=1). Details: .claude/rules/ground-truth.md
 CARDEOF
+show_dyn
 
 out=$(cd "$root" && "$py" tools/ground_truth/verify.py --mode=sync --show-warn 2>&1)
 rc=$?
