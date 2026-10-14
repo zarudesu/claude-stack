@@ -1939,9 +1939,26 @@ def check_stale_live_state(root: Path, data: dict) -> list[Issue]:
     stale_after_days = meta.get("stale_after_days", _STALE_DEFAULT_DAYS)
     if gt_store.detect_layout(root) == gt_store.SHARDED:
         return _stale_observed(data, stale_after_days)
+    for cid, date_str in legacy_live_state_dates(root, data).items():
+        age = (datetime.date.today() - datetime.date.fromisoformat(date_str)).days
+        if age > stale_after_days:
+            issues.append(
+                Issue(
+                    "warn",
+                    cid,
+                    f"live_state block last touched {date_str} ({age}d ago, limit {stale_after_days}d)",
+                )
+            )
+    return issues
+
+
+def legacy_live_state_dates(root: Path, data: dict) -> dict[str, str]:
+    """claim id -> date of the last commit that touched its live_state block in
+    STATUS.yaml; a block git cannot date is left out."""
+    dates: dict[str, str] = {}
     status_path = root / "STATUS.yaml"
     if not status_path.is_file():
-        return issues
+        return dates
     lines = status_path.read_text().splitlines()
 
     for claim in data.get("claims") or []:
@@ -1978,19 +1995,11 @@ def check_stale_live_state(root: Path, data: dict) -> list[Issue]:
         if not _DATE_RE.match(date_str):
             continue
         try:
-            audited = datetime.date.fromisoformat(date_str)
+            datetime.date.fromisoformat(date_str)
         except ValueError:
             continue
-        age = (datetime.date.today() - audited).days
-        if age > stale_after_days:
-            issues.append(
-                Issue(
-                    "warn",
-                    cid,
-                    f"live_state block last touched {date_str} ({age}d ago, limit {stale_after_days}d)",
-                )
-            )
-    return issues
+        dates[cid] = date_str
+    return dates
 
 
 def _stale_observed(data: dict, stale_after_days: int) -> list[Issue]:

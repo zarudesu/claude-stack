@@ -46,6 +46,13 @@ def interpreter() -> tuple[str, str]:
     return "python3", "PATH"
 
 
+def tool_drift(root: Path, skill: Path) -> list[str]:
+    """Installed tools/ground_truth/*.py whose bytes differ from skill/templates."""
+    return [path.name for path in sorted((root / "tools/ground_truth").glob("*.py"))
+            if (skill / "templates" / path.name).is_file()
+            and (skill / "templates" / path.name).read_bytes() != path.read_bytes()]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--skill", type=Path, help="skill directory to compare installed files with")
@@ -77,10 +84,8 @@ def main(argv: list[str]) -> int:
         elif args.skill and (ROOT / m.group(1)).read_bytes() != (args.skill / "templates" / name).read_bytes():
             problems.append(f"{m.group(1)} differs from the skill template; fix: {FIX}")
     if args.skill:
-        for path in sorted((ROOT / "tools/ground_truth").glob("*.py")):
-            template = args.skill / "templates" / path.name
-            if template.is_file() and template.read_bytes() != path.read_bytes():
-                problems.append(f"tools/ground_truth/{path.name} differs from the skill template; fix: {FIX}")
+        for name in tool_drift(ROOT, args.skill):
+            problems.append(f"tools/ground_truth/{name} differs from the skill template; fix: {FIX}")
 
     ci = [p for pattern in CI_FILES for p in ROOT.glob(pattern)]
     if not any(CI_VERIFY in p.read_text() for p in ci):
