@@ -46,7 +46,7 @@ SessionStart дописывает к строке очереди `; batch review
 - key: missing-path:price:src/old.py
   verdict: Replace
   evidence: replaced by STATUS.yaml#price_v2
-- key: cited-line:price:tests/test_core.py:2
+- key: cited-line:price:tests/test_core.py:64b5daad
   verdict: Consolidate
   into: missing-path:price:src/old.py
   evidence: same stale claim
@@ -83,12 +83,14 @@ python3 tools/ground_truth/gt_pending.py --root . batch --verdicts verdicts.yaml
   escalated: {stale-area: 1}           # пришли на прогон эскалированными
   carried: 0                           # без вердикта
   age: {median: 3, max: 3}             # дни с first_seen, очередь после прогона
-  auto_repaired: 0
+  auto_repaired: 2                     # ссылок, починенных Stop-хуком с прошлого прогона
 ```
 
 Приток — ключи очереди, которых не было в снапшоте прошлого блока; отток —
 ключи прошлого снапшота и текущей очереди, которых нет после прогона (вердикт
-или исчезнувшая находка). `report` показывает очередь, метрики последнего
+или исчезнувшая находка). Доля авто-ремонта — `auto_repaired / (auto_repaired +
+closed)`: ссылки, которые Stop-хук починил сам, против записей, снятых
+вердиктом. `report` показывает очередь, метрики последнего
 прогона (приток/отток, возраст, доля авто-ремонта, перенесённых без вердикта,
 Delete как шум) и:
 

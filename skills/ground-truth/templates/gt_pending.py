@@ -34,6 +34,7 @@ import argparse
 from collections import Counter
 from datetime import date
 import fnmatch
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,7 @@ QUEUE = ".ground-truth/pending.yaml"
 MODEL = ".ground-truth/model.yaml"
 LOG = ".ground-truth/pending-log.yaml"
 SESSIONS = "ground-truth-pending-sessions.json"
+REPAIRED = "ground-truth-auto-repaired"  # next to SESSIONS; the Stop hook adds, batch logs and clears
 STORED = ("key", "area", "class", "first_seen", "evidence", "batches_survived", "kept")
 VERDICTS = ("Keep", "Update", "Consolidate", "Replace", "Delete")
 PLACEHOLDERS = {"", "-", "?", "...", "todo", "tbd", "n/a", "na", "none"}
@@ -58,7 +60,7 @@ LIMITS = {"total": 30, "per_area": 5, "max_age_days": 7, "max_batches": 2, "max_
 STATUS_CLASSES = {
     "missing-path": re.compile(r"^path (['\"])(?P<obj>.+?)\1 does not exist"),
     "uncovered": re.compile(r"^(?P<obj>.+?) is not covered by any claim"),
-    "cited-line": re.compile(r"^cited line (?P<obj>.+?) does not contain «"),
+    "cited-line": re.compile(r"^cited line (?P<obj>.+?) does not contain «(?P<quote>.*)»; fix:"),
     "no-assertions": re.compile(r"^(?P<obj>.+): test has no assertions$"),
     "open-debt": re.compile(r"blocking debt on an implemented claim"),
     "no-canary": re.compile(r"^coverage root (?P<obj>.+?): \d+ implemented/partial claims, no canary"),
@@ -230,6 +232,8 @@ def status_findings(root, lines):
             if not m:
                 continue
             item = m.groupdict().get("obj") or ""
+            if cls == "cited-line":  # path and quote, no line number: a shift keeps first_seen
+                item = f"{item.rsplit(':', 1)[0]}:{hashlib.sha1(m['quote'].encode()).hexdigest()[:8]}"
             path = item.split(":")[0] if item else claim_path.get(cid)
             obj = ":".join(x for x in (cid if cid != "-" else "", item) if x)
             findings.append((cls, obj, area_of(path, areas) if path else "global", message))
@@ -346,6 +350,11 @@ def batch(root, verdicts_file):
     previous = set(log[-1]["keys"]) if log else set()
     verdicts, closed, noise, carried = Counter(), Counter(), Counter(), 0
     escalated = Counter(e["class"] for e in entries.values() if e["escalated"])
+    repaired = _sessions_path(root).with_name(REPAIRED)
+    try:
+        auto_repaired = int(repaired.read_text())
+    except (OSError, ValueError):
+        auto_repaired = 0
     for key in sorted(before):
         entry, item = entries[key], given.get(key)
         if item is None:
@@ -366,10 +375,11 @@ def batch(root, verdicts_file):
              "verdicts": {v: verdicts[v] for v in VERDICTS}, "closed": dict(closed),
              "noise": {c: n for c, n in noise.items() if n}, "escalated": dict(escalated), "carried": carried,
              "age": {"median": statistics.median_low(ages), "max": max(ages)},
-             "auto_repaired": 0}  # B3 fills it
+             "auto_repaired": auto_repaired}
     _write(Path(root) / QUEUE, _dump(data, limits, entries))
     old = (Path(root) / LOG).read_text() if log else ""
     _write(Path(root) / LOG, old + yaml.safe_dump([block], sort_keys=False, allow_unicode=True))
+    repaired.unlink(missing_ok=True)
     print(f"ground-truth pending batch: {len(items)} verdicts, {carried} carried, {len(entries)} left")
     return 0
 
@@ -386,9 +396,11 @@ def report(root, fmt="text"):
     if log:
         last = log[-1]
         decided = sum(last["verdicts"].values())
+        repaired = last["auto_repaired"]
         run = [f"{last['date']} at {last['rev']}: inflow {last['flow']['in']}, outflow {last['flow']['out']}",
                f"age median {last['age']['median']}d, max {last['age']['max']}d",
-               f"auto-repaired {last['auto_repaired']}/{last['flow']['out']} of outflow, carried without verdict "
+               f"auto-repaired {repaired}/{repaired + sum(last['closed'].values())} of repaired or closed by verdict, "
+               f"carried without verdict "
                f"{last['carried']}/{last['carried'] + decided}, Delete as noise {sum(last['noise'].values())}/{decided}",
                "verdicts: " + ", ".join(f"{v} {n}" for v, n in last["verdicts"].items())]
     if len(log) >= 2 and all(b["flow"]["out"] < b["flow"]["in"] for b in log[-2:]):

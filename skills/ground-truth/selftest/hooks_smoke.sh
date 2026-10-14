@@ -894,12 +894,14 @@ else
   fail "S5: gt_hook_state.py session-start/stop-red with an empty sid write nothing ($(cat "$REPO/.git/ground-truth-state.json" 2>/dev/null))"
 fi
 
-# Case R1: STATUS.yaml citation whose file gained lines above it -- a
-# line-reference drift is a warning, not a red Stop (D70): the hook
+# Case R1: STATUS.yaml citation whose file gained lines above it and
+# whose cited line changed too (so the hook's --repair leaves it, see R5)
+# -- a line-reference drift is a warning, not a red Stop (D70): the hook
 # stays green and names the fix in stderr; --apply then clears the
 # citation.
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_remap_repo
+write_pricing 150
 shift_pricing_lines
 out=$(run_stop_hook false 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "\[WARN\]" && printf '%s' "$out" | grep -q "remap_line_refs.py --apply"; then
@@ -940,6 +942,21 @@ if [ $rc2 -eq 0 ]; then
   pass "R4: Stop hook still green after the second --apply"
 else
   fail "R4: Stop hook still green after the second --apply (rc2=$rc2 out=$out)"
+fi
+
+# Case R5: the same shift with the cited line unchanged -- the Stop hook
+# repairs it itself before verify, says so in one line, warns about
+# nothing and counts the repair in the git dir for the next batch review.
+export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
+setup_remap_repo
+shift_pricing_lines
+out=$(run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qx "ground-truth: auto-repaired 1 line refs in STATUS.yaml" \
+  && ! printf '%s' "$out" | grep -q "drifted" && grep -q "app/pricing.py:5 for" "$REPO/STATUS.yaml" \
+  && [ "$(cat "$REPO/.git/ground-truth-auto-repaired")" = 1 ]; then
+  pass "R5: Stop hook auto-repairs a shift with unchanged content, no WARN, counter 1"
+else
+  fail "R5: Stop hook auto-repairs a shift with unchanged content, no WARN, counter 1 (rc=$rc out=$out)"
 fi
 
 # Case R2: nothing stale -> exit 0, no fix: hint is printed (a clean

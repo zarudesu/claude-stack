@@ -123,6 +123,21 @@ except Exception:
 " "$status_file" 2>/dev/null)
 [ -z "$mode" ] && mode=advisory
 
+# Trivial line shifts are repaired before verify reads STATUS.yaml: a quoted
+# citation moves to the one line holding its quote, any other one follows
+# the diff only when its line content is unchanged. The edit stays in the
+# working tree for the session to commit; the local count feeds the next
+# gt_pending.py batch. Anything left over is reported below as before.
+remapper="$root/tools/ground_truth/remap_line_refs.py"
+if [ -f "$remapper" ]; then
+  n=$(cd "$root" && "$py" "$remapper" --repair --base HEAD STATUS.yaml 2>/dev/null)
+  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+    echo "ground-truth: auto-repaired $n line refs in STATUS.yaml" >&2
+    counter="$(git -C "$root" rev-parse --absolute-git-dir)/ground-truth-auto-repaired"
+    echo $(( $(cat "$counter" 2>/dev/null || echo 0) + n )) > "$counter"
+  fi
+fi
+
 out=$(cd "$root" && "$py" "$verifier" --mode=sync --show-warn 2>&1)
 rc=$?
 # Its WARN lines feed the queue; only FAIL lines are printed below.
@@ -146,7 +161,6 @@ fi
 # here, not left for the next person to notice the citation points at the
 # wrong line. A tool error (rc=2) is a problem with the check itself, not
 # with STATUS.yaml, so it is only ever a warning, never red.
-remapper="$root/tools/ground_truth/remap_line_refs.py"
 remap_out=""
 remap_rc=0
 if [ -f "$remapper" ]; then

@@ -39,7 +39,7 @@ not shift it again. A STATUS_FILE with no counterpart at <base> is
 treated as entirely working-tree coordinates.
 
 Usage: remap_line_refs.py [--base HEAD] [--apply] [--dry-run] [--check]
-                           [--pre PATH] [--report PATH] STATUS_FILE
+                           [--repair] [--pre PATH] [--report PATH] STATUS_FILE
 
 May be run from any directory inside the repository -- the diff and the
 changed-file check are both resolved against the repository root, not
@@ -56,10 +56,21 @@ left untouched. --dry-run always wins if both are given.
 --check never writes anything, not even the JSON report: it prints one
 line per stale reference and a fix: hint, then exits 1 if it found any
 (0 if the file is clean, 2 on error) -- the shape a Stop hook wants.
+
+--repair rewrites STATUS_FILE in place like --apply, but only where the
+content proves the move, and prints the number of citations it changed.
+A path:N or path:N-M with a quote after it (as check_cited_lines in
+contract_lib reads it) whose lines lack the quote moves to the one line
+of the working-tree file holding it; a quote found 0 or 2+ times is left
+alone. Every other citation takes the base -> working-tree shift only
+when each cited line's base content equals its target line byte for
+byte. A quoted citation already holding its quote is not touched, so a
+second run changes nothing.
 """
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -93,6 +104,14 @@ DETACHED_COLON_RE = re.compile(r"(?<![\w/.\-\]]):(\d+)(?:-(\d+))?(?![\w-])")
 PROSE_RE = re.compile(
     r"\b(lines?)\s+(\d+(?:-\d+)?(?:(?:,\s*(?:and\s+)?|\s+and\s+)\d+(?:-\d+)?)*)"
 )
+
+# The citation and quote shapes contract_lib.check_cited_lines reads, copied
+# here for the same reason as _ENTRY_RE below.
+CITE_RE = re.compile(
+    r"(?P<path>(?:[\w.\-]+/)+[\w.\-]+|[\w\-]+\.[A-Za-z0-9]{1,5}):(?P<line>\d+)"
+    r"(?:-(?P<line_end>\d+))?(?!\d)"
+)
+QUOTE_RE = re.compile(r"«([^»]+)»|\"([^\"]+)\"|`([^`]+)`")
 
 # A minimal id-block splitter, kept self-contained here (this file is
 # copied into a target repository on its own, with no library import
@@ -274,11 +293,75 @@ def _nearest_path(text: str, before: int, mappers: dict):
     return found
 
 
-def _classify_span(span: str, nums: list[tuple[int, int, int]], mappers: dict, path: str):
-    """Map every number in nums (start,end,value) through mappers[path]; return (new_span, kind)."""
+@functools.lru_cache(maxsize=None)
+def lines_at(rev, path: str) -> list[str]:
+    """Lines of a repository-relative path at git rev, or in the working tree
+    for rev None; [] when the file is not there."""
+    root = _repo_root()
+    if rev is None:
+        full = os.path.join(root, path)
+        if not os.path.isfile(full):
+            return []
+        with open(full, encoding="utf-8", errors="replace") as f:
+            return f.read().splitlines()
+    out = subprocess.run(
+        ["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, text=True, errors="replace",
+    )
+    return out.stdout.splitlines() if out.returncode == 0 else []
+
+
+def same_content(base: str, path: str, n: int, nv: int) -> bool:
+    """--repair: line n of path at base is byte-identical to line nv in the working tree."""
+    old, new = lines_at(base, path), lines_at(None, path)
+    return 0 < n <= len(old) and 0 < nv <= len(new) and old[n - 1] == new[nv - 1]
+
+
+def _quote_after(text: str, end: int) -> str:
+    """The quote check_cited_lines pairs with a citation ending at end, or ''."""
+    qm = QUOTE_RE.search(text[end:end + 120].split(";", 1)[0])
+    return next((g for g in qm.groups() if g is not None), "").strip() if qm else ""
+
+
+def repair_quotes(text, base, current_id, rewritten, line_no):
+    """--repair: move each quoted path:N[-M] whose lines lack the quote to the
+    one working-tree line holding it. A range keeps the quote at the offset
+    it had at base, or else moves just far enough to cover it."""
+    edits = []
+    for m in CITE_RE.finditer(text):
+        quote = _quote_after(text, m.end())
+        lines = lines_at(None, m["path"]) if quote else []
+        if not lines:
+            continue
+        n = int(m["line"])
+        has_end = m["line_end"] is not None and int(m["line_end"]) >= n
+        end = int(m["line_end"]) if has_end else n
+        if any(quote in lines[i - 1].strip() for i in range(max(n, 1), min(end, len(lines)) + 1)):
+            continue
+        hits = [i for i, line in enumerate(lines, 1) if quote in line.strip()]
+        if len(hits) != 1:
+            continue
+        old = lines_at(base, m["path"]) if has_end else []
+        anchor = next((i for i in range(n, min(end, len(old)) + 1) if quote in old[i - 1].strip()),
+                      n if hits[0] < n else end)
+        delta = hits[0] - anchor
+        stop = m.end("line_end") if has_end else m.end("line")
+        new = f"{n + delta}-{end + delta}" if has_end else str(n + delta)
+        edits.append((m.start("line"), stop, new))
+        rewritten.append({"id": current_id, "path": m["path"], "old": text[m.start("line"):stop], "new": new,
+                          "kind": "quote", "line": line_no})
+    for s, e, new in reversed(edits):
+        text = text[:s] + new + text[e:]
+    return text
+
+
+def _classify_span(span: str, nums: list[tuple[int, int, int]], mappers: dict, path: str, repair=None):
+    """Map every number in nums (start,end,value) through mappers[path]; return (new_span, kind).
+    repair: the --repair base -- a span whose cited content changed is left as it is."""
     results = [mappers[path](n) for (_, _, n) in nums]
     if any(k == "deleted" for _, k in results):
         return None, "deleted"
+    if repair is not None and not all(same_content(repair, path, n, nv) for (_, _, n), (nv, _) in zip(nums, results)):
+        return span, "same"
     if any(k == "replaced" for _, k in results):
         kind = "replaced"
     elif any(nv != n for (nv, _), (_, _, n) in zip(results, nums)):
@@ -291,18 +374,23 @@ def _classify_span(span: str, nums: list[tuple[int, int, int]], mappers: dict, p
     return new_span, kind
 
 
-def process_value(text, mappers, current_id, totals, rewritten, deleted, unparsed, assoc_risk, pre_blocks, line_no):
-    """Rewrite every changed-file citation in one note/description value."""
+def process_value(text, mappers, current_id, totals, rewritten, deleted, unparsed, assoc_risk, pre_blocks, line_no,
+                  repair=None):
+    """Rewrite every changed-file citation in one note/description value.
+    repair: the --repair base; quoted citations are then repair_quotes' alone."""
     edits: list[tuple[int, int, str]] = []
     consumed: list[tuple[int, int]] = []
     changed_here = {m.group(1) for m in PATH_RE.finditer(text) if m.group(1) in mappers}
     risky = len(changed_here) >= 2
+    quoted = {m.start("line") - 1 for m in CITE_RE.finditer(text) if _quote_after(text, m.end())} if repair else set()
 
     for m in PATH_RE.finditer(text):
         path = m.group(1)
         if path not in mappers:
             continue
         path_end = m.end()
+        if path_end in quoted:
+            continue
         res = parse_colon_list(text, path_end) or parse_line_list(text, path_end)
         if res is None:
             if re.search(r"\d", text[path_end:path_end + 15]):
@@ -319,7 +407,7 @@ def process_value(text, mappers, current_id, totals, rewritten, deleted, unparse
             continue
         span = text[path_end:spec_end]
         nums = [(nm.start(), nm.end(), int(nm.group())) for nm in re.finditer(r"\d+", span)]
-        new_span, kind = _classify_span(span, nums, mappers, path)
+        new_span, kind = _classify_span(span, nums, mappers, path, repair)
         totals[kind] += 1
         if kind == "deleted":
             deleted.append({"id": current_id, "path": path, "text": span})
@@ -345,7 +433,7 @@ def process_value(text, mappers, current_id, totals, rewritten, deleted, unparse
             continue
         totals["found"] += 1
         totals["in_changed"] += 1
-        new_span, kind = _classify_span(span, nums, mappers, path)
+        new_span, kind = _classify_span(span, nums, mappers, path, repair)
         totals[kind] += 1
         if kind == "deleted":
             deleted.append({"id": current_id, "path": path, "text": span})
@@ -379,7 +467,7 @@ def process_value(text, mappers, current_id, totals, rewritten, deleted, unparse
         nums = [(nm.start(), nm.end(), int(nm.group())) for nm in re.finditer(r"\d+", numlist)]
         totals["found"] += 1
         totals["in_changed"] += 1
-        new_numlist, kind = _classify_span(numlist, nums, mappers, path)
+        new_numlist, kind = _classify_span(numlist, nums, mappers, path, repair)
         totals[kind] += 1
         if kind == "deleted":
             deleted.append({"id": current_id, "path": path, "text": span})
@@ -395,10 +483,12 @@ def process_value(text, mappers, current_id, totals, rewritten, deleted, unparse
     return text
 
 
-def process_status_file(lines: list[str], mappers: dict, pre_blocks=None, wt_lines=frozenset()):
+def process_status_file(lines: list[str], mappers: dict, pre_blocks=None, wt_lines=frozenset(), repair=None):
     """wt_lines: STATUS_FILE line numbers (1-based) already in working-tree
     coordinates (see worktree_citation_lines) -- skipped rather than
-    remapped again. None means every line counts as working-tree."""
+    remapped again. None means every line counts as working-tree.
+    repair: the --repair base ref; quoted citations are then repaired on
+    every line, wt_lines or not, since the check is by content."""
     totals = dict.fromkeys(["found", "in_changed", "same", "shifted", "replaced", "deleted", "unparsed"], 0)
     rewritten, deleted, unparsed, assoc_risk = [], [], [], []
     current_id = "?"
@@ -411,12 +501,13 @@ def process_status_file(lines: list[str], mappers: dict, pre_blocks=None, wt_lin
         km = KEY_RE.match(line)
         if not km:
             continue
-        if wt_lines is None or (idx + 1) in wt_lines:
-            continue
         value = line[km.end():]
-        new_value = process_value(
-            value, mappers, current_id, totals, rewritten, deleted, unparsed, assoc_risk, pre_blocks, idx + 1,
-        )
+        new_value = repair_quotes(value, repair, current_id, rewritten, idx + 1) if repair else value
+        if wt_lines is not None and (idx + 1) not in wt_lines:
+            new_value = process_value(
+                new_value, mappers, current_id, totals, rewritten, deleted, unparsed, assoc_risk, pre_blocks, idx + 1,
+                repair,
+            )
         if new_value != value:
             out_lines[idx] = line[:km.end()] + new_value
     return out_lines, totals, rewritten, deleted, unparsed, assoc_risk
@@ -446,6 +537,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--apply", action="store_true", help="rewrite STATUS_FILE in place")
     ap.add_argument("--dry-run", action="store_true", help="never write STATUS_FILE, even with --apply")
     ap.add_argument("--check", action="store_true", help="report stale references only, no write, exit 1 if any")
+    ap.add_argument("--repair", action="store_true", help="rewrite only content-proven moves, print their count")
     ap.add_argument("--pre", help="path to STATUS_FILE as it was before any remap against this base")
     ap.add_argument("--report", help="also write the JSON report to PATH (off by default)")
     ap.add_argument("status_file")
@@ -478,7 +570,7 @@ def main(argv: list[str]) -> int:
 
     wt_lines = worktree_citation_lines(args.base, args.status_file)
     out_lines, totals, rewritten, deleted, unparsed, assoc_risk = process_status_file(
-        lines, mappers, pre_blocks, wt_lines,
+        lines, mappers, pre_blocks, wt_lines, args.base if args.repair else None,
     )
 
     if args.check:
@@ -490,9 +582,10 @@ def main(argv: list[str]) -> int:
             print(f"fix: {sys.executable} tools/ground_truth/remap_line_refs.py --apply {args.status_file}")
         return 1 if rewritten else 0
 
-    write_report(args.report, totals, rewritten, deleted, unparsed, assoc_risk)
+    if not args.repair:
+        write_report(args.report, totals, rewritten, deleted, unparsed, assoc_risk)
 
-    if args.apply and not args.dry_run:
+    if (args.apply and not args.dry_run) or (args.repair and rewritten):
         new_text = "".join(out_lines)
         try:
             yaml.safe_load(new_text)
@@ -510,6 +603,8 @@ def main(argv: list[str]) -> int:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
             return 1
+    if args.repair:
+        print(len(rewritten))
     return 0
 
 

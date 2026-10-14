@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -597,7 +598,7 @@ class PendingQueueChecks(unittest.TestCase):
         self.assertEqual(found, {
             ("missing-path", "price:app dir/it's gone.py", "app dir"),
             ("uncovered", "app dir/new file.py", "app dir"),
-            ("cited-line", "price:tests/test_core.py:2", "tests"),
+            ("cited-line", "price:tests/test_core.py:64b5daad", "tests"),
             ("no-assertions", "price:tests/test_core.py::test_price", "tests"),
             ("open-debt", "price_debt", "app dir"),
             ("no-canary", "app dir/", "app dir")}, proc.stdout)
@@ -655,6 +656,100 @@ class PendingQueueChecks(unittest.TestCase):
         first = self.hook("ground-truth-session-start.sh", touch=None).stdout
         self.assertTrue(first.startswith("ground-truth pending 2/30, oldest 0d, escalated 0\n"), first)
         self.assertEqual(self.hook("ground-truth-session-start.sh", touch=None).stdout, first)
+
+
+class AutoRepairChecks(unittest.TestCase):
+    """The Stop hook repairs content-proven line shifts in STATUS.yaml before the real verify reads it."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="gt-repair-test-")
+        self.repo = Path(self.temp.name)
+        tools = self.repo / "tools/ground_truth"
+        tools.mkdir(parents=True)
+        for name in ("verify.py", "contract_lib.py", "gt_pending.py", "remap_line_refs.py"):
+            shutil.copyfile(SKILL / "templates" / name, tools / name)
+        (self.repo / "src").mkdir()
+        self.code = self.repo / "src/core.py"
+        self.code.write_text("def price():\n    return 1\n\n\ndef tax():\n    return 2\n")
+        self.counter = self.repo / ".git" / gt_pending.REPAIRED
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def status(self, *notes, commit=True):
+        claims = "".join(f"  - id: c{i}\n    component: c{i}\n    kind: status\n    status: implemented\n"
+                         f"    path: src/core.py\n    check_kind: pytest\n    check: tests/test_core.py::test_x\n"
+                         f"    note: {note}\n" for i, note in enumerate(notes))
+        (self.repo / "STATUS.yaml").write_text(
+            "schema_version: 1\nmeta:\n  repo: fixture\n  enforcement: advisory\n  last_audited: '2026-10-13'\n"
+            "  coverage:\n    roots: [src/]\n    runner: pytest\nclaims:\n" + claims)
+        if commit:
+            subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=fixture", "-c",
+                            "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+
+    def shift(self, text="# a\n# b\n# c\n"):
+        self.code.write_text(text + self.code.read_text())
+
+    def stop(self):
+        return subprocess.run(["bash", str(SKILL / "templates/ground-truth-sync-check.sh")],
+                              input=json.dumps({"cwd": str(self.repo), "session_id": "s1"}),
+                              text=True, capture_output=True, env={**os.environ, "GT_PYTHON": sys.executable})
+
+    def notes(self):
+        return [c["note"] for c in yaml.safe_load((self.repo / "STATUS.yaml").read_text())["claims"]]
+
+    def cited(self):
+        return {k: e for k, e in gt_pending.load(self.repo)[2].items() if e["class"] == "cited-line"}
+
+    def test_unique_quote_and_range_follow_their_lines_once(self):
+        self.status("see src/core.py:5 «def tax»", "see src/core.py:5-6 «return 2»")
+        self.shift()
+        proc = self.stop()
+        self.assertIn("ground-truth: auto-repaired 2 line refs in STATUS.yaml\n", proc.stderr)
+        self.assertEqual(self.notes(), ["see src/core.py:8 «def tax»", "see src/core.py:8-9 «return 2»"])
+        self.assertEqual(self.cited(), {})
+        self.assertEqual(self.counter.read_text().strip(), "2")
+        before = (self.repo / "STATUS.yaml").read_bytes()
+        proc = self.stop()
+        self.assertNotIn("auto-repaired", proc.stderr)
+        self.assertEqual((self.repo / "STATUS.yaml").read_bytes(), before)
+        self.assertEqual(self.counter.read_text().strip(), "2")
+
+    def test_quote_found_twice_or_nowhere_is_left_for_the_queue(self):
+        self.status("see src/core.py:2 «return»", "see src/core.py:5 «def gone»")
+        self.shift()
+        proc = self.stop()
+        self.assertNotIn("auto-repaired", proc.stderr)
+        self.assertEqual(self.notes(), ["see src/core.py:2 «return»", "see src/core.py:5 «def gone»"])
+        self.assertFalse(self.counter.exists())
+        sha = lambda quote: hashlib.sha1(quote.encode()).hexdigest()[:8]
+        self.assertEqual(sorted(self.cited()), [f"cited-line:c0:src/core.py:{sha('return')}",
+                                                f"cited-line:c1:src/core.py:{sha('def gone')}"])
+
+    def test_cited_line_key_survives_a_new_line_number(self):
+        self.status("see src/core.py:2 «return»")
+        self.shift()
+        self.stop()
+        [key] = self.cited()
+        queue = self.repo / gt_pending.QUEUE
+        queue.write_text(queue.read_text().replace(gt_pending.date.today().isoformat(), "2026-10-10"))
+        self.status("see src/core.py:4 «return»", commit=False)
+        proc = self.stop()
+        self.assertNotIn("queued", proc.stderr)
+        self.assertEqual(list(self.cited()), [key])
+        self.assertEqual(self.cited()[key]["first_seen"]["date"], "2026-10-10")
+
+    def test_bare_citation_moves_only_with_unchanged_content(self):
+        self.status("see src/core.py:5 for tax", "see src/core.py:2 for price")
+        self.shift()
+        self.code.write_text(self.code.read_text().replace("return 1", "return 10"))
+        proc = self.stop()
+        self.assertIn("ground-truth: auto-repaired 1 line refs in STATUS.yaml\n", proc.stderr)
+        self.assertEqual(self.notes(), ["see src/core.py:8 for tax", "see src/core.py:2 for price"])
+        self.assertIn("src/core.py:2 -> 5", proc.stderr)
+        self.assertEqual(self.counter.read_text().strip(), "1")
 
 
 class BatchReviewChecks(unittest.TestCase):
@@ -720,6 +815,17 @@ class BatchReviewChecks(unittest.TestCase):
                           {"median": 0, "max": 0}, 0))
         # A kept entry still counts against the limits.
         self.assertIn("2/30 entries", self.out("report"))
+
+    def test_batch_logs_and_clears_the_auto_repair_count(self):
+        self.seed("uncovered:src/a.py", "uncovered:src/b.py")
+        counter = self.repo / ".git" / gt_pending.REPAIRED
+        counter.write_text("3\n")
+        self.assertEqual(self.batch([{"key": "uncovered:src/a.py", "verdict": "Update", "evidence": "claim added"}])[0], 0)
+        self.assertEqual(self.log()[-1]["auto_repaired"], 3)
+        self.assertFalse(counter.exists())
+        self.assertIn("auto-repaired 3/4 of repaired or closed by verdict", self.out("report"))
+        self.assertEqual(self.batch([])[0], 0)
+        self.assertEqual(self.log()[-1]["auto_repaired"], 0)
 
     def test_bad_verdict_file_leaves_queue_and_log(self):
         self.seed("uncovered:src/a.py", "uncovered:src/b.py")
