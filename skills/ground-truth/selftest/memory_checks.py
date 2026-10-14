@@ -1190,6 +1190,30 @@ class PacketChecks(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.packet.show_main(["--root", str(self.repo), "src/nothing.py"]), 1)
 
+    def usage(self):
+        path = self.repo / ".git" / "ground-truth-usage.json"
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def test_usage_touch_by_context_show_and_session_not_verify(self):
+        import gt_usage
+        import verify
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            verify.main(["--mode=sync", "--root", str(self.repo)])
+        self.assertIsNone(self.usage())
+        with mock.patch.dict(os.environ, {"GT_TODAY": "2026-03-01"}):
+            packet = json.loads(self.context("--area", "big", "--json"))
+        facts = [f["id"] for a in packet["areas"] for f in a["facts"]]
+        self.assertEqual(len(facts), 13)  # 15 shown, 2 of them drifted; "+187 more" is not read
+        self.assertEqual(self.usage(), {"since": "2026-03-01", "last": dict.fromkeys(facts, "2026-03-01")})
+        with mock.patch.dict(os.environ, {"GT_TODAY": "2026-03-02"}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.packet.show_main(["--root", str(self.repo), "gone"]), 0)
+        self.assertEqual(self.usage()["last"]["gone"], "2026-03-02")
+        (self.repo / "src/small/a.py").write_text("A = 3\n")
+        with mock.patch.dict(os.environ, {"GT_TODAY": "2026-03-03"}):
+            gt_usage.main(["--root", str(self.repo), "touch-session"])
+        usage = self.usage()
+        self.assertEqual((usage["since"], usage["last"]["small_a"], len(usage["last"])), ("2026-03-01", "2026-03-03", 15))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -158,6 +158,9 @@ rc=$?
 # Its WARN lines feed the queue; only FAIL lines are printed below.
 [ -f "$pending" ] && [ $rc -le 1 ] && printf '%s\n' "$out" | "$py" "$pending" --root "$root" record --session "$sid"
 out=$(printf '%s\n' "$out" | grep -v '^\[WARN\]')
+# Claims whose path this session changed count as used (gt_usage.py).
+usage="$root/tools/ground_truth/gt_usage.py"
+[ -f "$usage" ] && "$py" "$usage" --root "$root" touch-session
 
 # The session guard proves what the verifier cannot see from shape alone:
 # that touched claim checks are green and new/raised claims describe a mutation.

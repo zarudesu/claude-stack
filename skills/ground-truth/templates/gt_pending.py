@@ -140,10 +140,13 @@ def _sessions(root):
     return data if isinstance(data, dict) else {}
 
 
-@contextlib.contextmanager
 def _locked(root):
-    """An O_EXCL lock file next to the sessions file; one left by a killed hook is taken over after 10s."""
-    lock = _sessions_path(root).with_name(LOCK)
+    return _hold(_sessions_path(root).with_name(LOCK))
+
+
+@contextlib.contextmanager
+def _hold(lock):
+    """An O_EXCL lock file; one left by a killed hook is taken over after 10s."""
     while True:
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

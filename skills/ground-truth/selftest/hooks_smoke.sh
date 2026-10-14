@@ -290,6 +290,18 @@ else
   fail "session guard: touched claim, check green -> exit 0 (rc=$rc out=$out)"
 fi
 
+# Case U1: the same Stop records the touched claim as used in the common git dir
+setup_guard_repo
+cp "$TEMPLATES_DIR/gt_pending.py" "$REPO/tools/ground_truth/gt_pending.py"  # gt-allow: real install path, not prose
+cp "$TEMPLATES_DIR/gt_usage.py" "$REPO/tools/ground_truth/gt_usage.py"  # gt-allow: real install path, not prose
+echo "# tuned for the new plan" >> "$REPO/app/pricing.py"
+out=$(GT_TODAY=2026-05-01 run_stop_hook false 2>&1); rc=$?
+if [ $rc -eq 0 ] && grep -q '"monthly_price_basic": "2026-05-01"' "$REPO/.git/ground-truth-usage.json"; then
+  pass "U1: Stop hook touches the claim whose path the session changed"
+else
+  fail "U1: Stop hook touches the claim whose path the session changed (rc=$rc out=$out)"
+fi
+
 # Case 13: the same claim's check turned red by this change -> exit 2
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_guard_repo
