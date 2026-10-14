@@ -46,6 +46,8 @@ TOOLS_FILES = [
     "remap_line_refs.py",
     "gt_doctor.py",
     "gt_pending.py",
+    "gt.py",
+    "gt_migrate.py",
 ]
 EXAMPLE_PROBE = "example_probe.py"
 HOOK_FILES = [

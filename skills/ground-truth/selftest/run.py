@@ -3294,6 +3294,207 @@ def sharded_guard_scenarios() -> bool:
     return ok
 
 
+
+MIGRATE_MODEL = """\
+version: 1
+repositories:
+  app:
+    path: {path}
+    watch: [services/alpha, tools/ground_truth, STATUS.yaml, README.md]
+areas:
+  - id: alpha
+    repo: app
+    summary: alpha service
+    sources: [services/alpha]
+    docs: [README.md]
+  - id: tooling
+    repo: app
+    summary: the contract and its tools
+    sources:
+      - tools/ground_truth
+      - STATUS.yaml
+    docs: [README.md]
+"""
+
+
+def migrate_scenarios() -> bool:
+    """gt migrate: legacy STATUS.yaml to the sharded layout, proven equal, rolled back on a difference."""
+    import io
+    from unittest import mock
+
+    import yaml
+
+    sys.path.insert(0, str(TEMPLATES))
+    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
+    import gt_context
+    import gt_migrate
+    import i9_install
+
+    ok = True
+
+    def git(repo: Path, *args: str, env: dict | None = None) -> str:
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True,
+                              env=env).stdout.strip()
+
+    def prepare(repo: Path, edit=None, files: dict | None = None, date: str | None = None) -> Path:
+        shutil.copytree(FIXTURE, repo, symlinks=True)
+        for name in i9_install.TOOLS_FILES:
+            shutil.copy(TEMPLATES / name, repo / "tools" / "ground_truth" / name)
+        status = repo / "STATUS.yaml"
+        if edit:
+            status.write_text(edit(status.read_text()))
+        for rel, text in (files or {}).items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text)
+        env = {**os.environ, "GIT_AUTHOR_DATE": f"{date}T12:00:00"} if date else None
+        git(repo, "add", "-A", env=env)
+        git(repo, "commit", "-q", "-m", "prepare migration", env=env)
+        return repo
+
+    def migrate(repo: Path, *args: str) -> subprocess.CompletedProcess:
+        return run(["tools/ground_truth/gt.py", "migrate", *args], repo)
+
+    def full(repo: Path) -> int:
+        return run(["tools/ground_truth/verify.py", "--mode=full"], repo).returncode
+
+    def shards(repo: Path) -> dict:
+        store = repo / ".ground-truth"
+        return {p.relative_to(repo).as_posix(): p.read_bytes()
+                for p in sorted(store.rglob("*.yaml")) if p.name != "model.yaml"}
+
+    def area_of(repo: Path) -> dict:
+        return {c["id"]: p.stem for p in (repo / ".ground-truth" / "areas").glob("*.yaml")
+                for c in yaml.safe_load(p.read_text())["claims"]}
+
+    equal = "equivalent: FAIL Δ0, WARN Δ0"
+
+    # (1) STATUS-only, blocking, a live_state block last committed long ago.
+    old_day = "2026-01-02"
+    blocking = prepare(SCRATCH_BASE / "migrate-blocking", lambda t: t.replace(
+        "enforcement: advisory", "enforcement: blocking", 1).replace(
+        "a real repo would curl", "a deployed repo would curl", 1), date=old_day)
+    twin = SCRATCH_BASE / "migrate-blocking-twin"
+    shutil.copytree(blocking, twin, symlinks=True)
+    rc_before = full(blocking)
+    dry = migrate(blocking, "--skill", str(SKILL_ROOT))
+    ok &= record(
+        "migrate: dry run prints areas and files, compares tools with the skill, writes nothing",
+        dry.returncode == 0 and "create: .ground-truth/contract.yaml" in dry.stdout
+        and "tools: same as the skill templates" in dry.stdout
+        and not (blocking / ".ground-truth").exists() and git(blocking, "status", "--porcelain") == "",
+        out(dry),
+    )
+    cp = migrate(blocking, "--write", "--skill", str(SKILL_ROOT))
+    live = next(c for c in yaml.safe_load((blocking / ".ground-truth/areas/global.yaml").read_text())["claims"]
+                if c["id"] == "alpha_health_live")
+    ok &= record(
+        "migrate: --write on a blocking STATUS-only repo -> data same, FAIL/WARN Δ0, rc 0, "
+        "verify --mode=full rc unchanged, live_state observed = its last commit date",
+        cp.returncode == 0 and "data: same" in cp.stdout and equal in cp.stdout
+        and not (blocking / "STATUS.yaml").exists() and full(blocking) == rc_before
+        and str(live["observed"]) == old_day,
+        out(cp),
+    )
+    cp = migrate(blocking, "--write")
+    ok &= record("migrate: second run on the sharded layout -> no-op, rc 0",
+                 cp.returncode == 0 and "already migrated" in cp.stdout, out(cp))
+    with added_file(blocking / "STATUS.yaml", "schema_version: 1\nclaims: []\n"):
+        cp = migrate(blocking, "--write")
+    ok &= record("migrate: STATUS.yaml next to contract.yaml (mixed) -> rc 3, nothing merged",
+                 cp.returncode == 3 and "finish `gt migrate`" in cp.stderr, out(cp))
+    migrate(twin, "--write")
+    ok &= record("migrate: two runs on the same input write the same bytes",
+                 shards(twin) == shards(blocking) and len(shards(blocking)) > 3, sorted(shards(twin)))
+
+    # (2) roots ['.'], claims with several paths, a group over --max-claims split by directory.
+    paths = prepare(SCRATCH_BASE / "migrate-paths", lambda t: t.replace(
+        "    roots:\n      - services\n      - handlers\n", "    roots:\n      - .\n", 1).replace(
+        '    path: "handlers"\n',
+        "    path:\n      - handlers\n      - services/alpha/core.py\n      - services/alpha\n", 1).replace(
+        '    path: "main.py"\n', "    path: [svc, main.py]\n", 1))
+    rc_before = full(paths)
+    cp = migrate(paths, "--write", "--max-claims", "1", "--min-claims", "1")
+    areas = area_of(paths)
+    ok &= record(
+        "migrate: roots ['.'], multi-path claims, oversized services/ split -> majority area, "
+        "tie to the first path, Δ0, verify rc unchanged",
+        cp.returncode == 0 and equal in cp.stdout and full(paths) == rc_before
+        and areas["handlers_http"] == areas["alpha_greeting"] == "services-alpha"
+        and areas["beta_worker_stub"] == "services-beta" and areas["main_script"] == "svc"
+        and areas["external_dashboard"] == areas["ops_smoke"] == "global"
+        and yaml.safe_load((paths / ".ground-truth/areas/services-alpha.yaml").read_text())["sources"]
+        == ["services/alpha"],
+        f"{areas}\n{out(cp)}",
+    )
+
+    # (3) STATUS.yaml with model.yaml, in the repo and behind a workspace pointer.
+    for label, workspace in (("model.yaml", False), ("workspace pointer", True)):
+        top = SCRATCH_BASE / f"migrate-{'ws' if workspace else 'model'}"
+        repo = top / "app" if workspace else top
+        model_root = top if workspace else repo
+        model_text = MIGRATE_MODEL.format(path="app" if workspace else ".")
+        files = {".ground-truth/workspace": "..\n"} if workspace else {".ground-truth/model.yaml": model_text}
+        if workspace:
+            (top / ".ground-truth").mkdir(parents=True)
+            (top / ".ground-truth/model.yaml").write_text(model_text)
+        prepare(repo, files=files)
+        view = gt_context.inspect(model_root)
+        gt_context.refresh(model_root, list(view["nodes"]), view["revision"], "fixture review")
+        rc_before = full(repo)
+        cp = migrate(repo, "--write")
+        fresh = {a: v["fresh"] for a, v in gt_context.inspect(model_root)["areas"].items()}
+        alpha = yaml.safe_load((repo / ".ground-truth/areas/alpha.yaml").read_text())
+        ok &= record(
+            f"migrate: {label} -> STATUS.yaml source dropped from model.yaml, its area's receipt "
+            "refreshed and fresh, claims under model sources go to the model area, Δ0",
+            cp.returncode == 0 and equal in cp.stdout and full(repo) == rc_before
+            and (model_root / ".ground-truth/model.yaml").read_text() == model_text.replace("      - STATUS.yaml\n", "")
+            and fresh == {"alpha": True, "tooling": True} and "receipts refreshed: tooling" in cp.stdout
+            and [c["id"] for c in alpha["claims"]] == ["alpha_greeting"] and "sources" not in alpha,
+            f"{fresh}\n{out(cp)}",
+        )
+
+    # (4) A shard that reads back different rolls everything back.
+    broken = prepare(SCRATCH_BASE / "migrate-rollback")
+    status_bytes = (broken / "STATUS.yaml").read_bytes()
+    real = gt_migrate.render_area
+
+    def corrupt(area, sources, entries):
+        return real(area, sources, entries).replace("status: implemented", "status: partial", 1)
+
+    with mock.patch.object(gt_migrate, "render_area", corrupt), \
+            contextlib.redirect_stdout(io.StringIO()) as buf:
+        rc = gt_migrate.main(["--write", "--root", str(broken)])
+    ok &= record(
+        "migrate: a corrupted shard -> rc 1, STATUS.yaml restored byte for byte, no new files, clean tree",
+        rc == 1 and "rolled back" in buf.getvalue() and (broken / "STATUS.yaml").read_bytes() == status_bytes
+        and not (broken / ".ground-truth").exists() and git(broken, "status", "--porcelain") == "",
+        buf.getvalue(),
+    )
+
+    # (5) Preconditions and arguments.
+    with appended(broken / "tools/ground_truth/verify.py", "# an older install\n"):
+        git(broken, "commit", "-qam", "older verify.py")
+        cp_old = migrate(broken, "--write", "--skill", str(SKILL_ROOT))
+        cp_skip = migrate(broken)
+    git(broken, "commit", "-qam", "current verify.py")
+    with appended(broken / "STATUS.yaml", "# uncommitted\n"):
+        cp_dirty = migrate(broken, "--write")
+    cp_args = migrate(broken, "--depth", "0")
+    cp_none = run(["tools/ground_truth/gt.py"], broken)
+    ok &= record(
+        "migrate: tools differing from the skill -> rc 3 asking for i9_install; without --skill the "
+        "dry run says it did not compare; uncommitted STATUS.yaml -> rc 3; bad argument -> rc 2",
+        cp_old.returncode == 3 and "run i9_install --write first" in cp_old.stderr
+        and (broken / "STATUS.yaml").is_file() and not (broken / ".ground-truth").exists()
+        and cp_skip.returncode == 0 and "not compared with the skill templates" in cp_skip.stdout
+        and cp_dirty.returncode == 3 and "commit the contract first" in cp_dirty.stderr
+        and cp_args.returncode == 2 and cp_none.returncode == 2,
+        f"old={out(cp_old)} skip={out(cp_skip)} dirty={out(cp_dirty)} args={out(cp_args)} none={out(cp_none)}",
+    )
+    return ok
+
+
 def main() -> int:
     build_fixture()
     ok = True
@@ -3301,6 +3502,7 @@ def main() -> int:
     ok &= sharded_layout_scenarios()
     ok &= pending_queue_ci_scenario()
     ok &= sharded_guard_scenarios()
+    ok &= migrate_scenarios()
     ok &= fault_scenarios()
     ok &= banned_words_exclude_scenarios()
     ok &= step4_scenarios()
