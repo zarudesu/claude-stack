@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -641,6 +643,18 @@ class PendingQueueChecks(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("survived 2 batch reviews (>= 2)", proc.stderr)
 
+    def test_kept_entry_does_not_escalate_by_sessions(self):
+        self.warn("src/a.py")
+        self.hook("ground-truth-sync-check.sh", "s1")
+        verdicts = Path(self.temp.name) / "v.yaml"
+        verdicts.write_text("- key: uncovered:src/a.py\n  verdict: Keep\n  evidence: refactor lands next week\n")
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gt_pending.main(["--root", str(self.repo), "batch", "--verdicts", str(verdicts)]), 0)
+        for session in ("s2", "s3"):
+            proc = self.hook("ground-truth-sync-check.sh", session)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("sessions", proc.stderr)
+
     def test_ci_counts_only_entries_still_found(self):
         self.warn(*(f"m{i}/a.py" for i in range(31)))
         self.hook("ground-truth-sync-check.sh")
@@ -826,6 +840,56 @@ class BatchReviewChecks(unittest.TestCase):
         self.assertIn("auto-repaired 3/4 of repaired or closed by verdict", self.out("report"))
         self.assertEqual(self.batch([])[0], 0)
         self.assertEqual(self.log()[-1]["auto_repaired"], 0)
+
+    def test_closed_finding_seen_again_keeps_its_age(self):
+        self.seed("uncovered:src/a.py")
+        self.edit("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
+        self.assertEqual(self.batch([{"key": "uncovered:src/a.py", "verdict": "Update", "evidence": "claim added"}])[0], 0)
+        self.assertEqual(gt_pending.load(self.repo)[2], {})
+        self.seed("uncovered:src/a.py")
+        entry = gt_pending.load(self.repo)[2]["uncovered:src/a.py"]
+        self.assertEqual((entry["first_seen"]["date"], entry["batches_survived"], entry["escalated"]),
+                         ("2000-01-01", 1, True))
+        data = yaml.safe_load(self.queue.read_text())
+        self.assertEqual((data.get("closed"), data["reopened"]), (None, 1))
+        self.assertEqual(self.batch([])[0], 0)
+        self.assertEqual(self.log()[-1]["reopened"], 1)
+        self.assertIn("reopened after a verdict 1", self.out("report"))
+        self.assertNotIn("reopened", yaml.safe_load(self.queue.read_text()))
+
+    def test_tombstone_goes_when_the_finding_is_gone(self):
+        self.seed("uncovered:src/a.py", "uncovered:src/b.py")
+        self.batch([{"key": "uncovered:src/a.py", "verdict": "Delete", "evidence": "file removed"}])
+        self.assertEqual(list(yaml.safe_load(self.queue.read_text())["closed"]), ["uncovered:src/a.py"])
+        self.seed("uncovered:src/b.py")
+        self.assertNotIn("closed", yaml.safe_load(self.queue.read_text()))
+
+    def test_ci_skips_an_ignored_class(self):
+        self.seed("uncovered:src/a.py")
+        self.edit("uncovered:src/a.py", first_seen={"date": "2000-01-01", "rev": "-"})
+        classes = set(gt_pending.STATUS_CLASSES)
+        self.assertEqual(len(gt_pending.ci_problems(self.repo, {"uncovered:src/a.py"}, classes)), 1)
+        self.edit(classes={"uncovered": "ignore"})
+        self.assertEqual(gt_pending.ci_problems(self.repo, {"uncovered:src/a.py"}, classes), [])
+
+    def test_record_waits_for_the_lock_and_takes_over_a_stale_one(self):
+        self.seed("uncovered:src/a.py")
+        lock = self.repo / ".git" / gt_pending.LOCK
+        lock.write_text("")
+        run = lambda s: gt_pending.record(self.repo, [("uncovered", "src/a.py", "src", "ev")],
+                                          set(gt_pending.STATUS_CLASSES), s)
+        second = threading.Thread(target=run, args=("s2",))
+        second.start()
+        time.sleep(0.3)
+        self.assertTrue(second.is_alive())
+        lock.unlink()
+        second.join(5)
+        sessions = json.loads((self.repo / ".git" / gt_pending.SESSIONS).read_text())
+        self.assertEqual(sessions["uncovered:src/a.py"], ["s1", "s2"])
+        lock.write_text("")
+        os.utime(lock, (time.time() - 60, time.time() - 60))
+        run("s3")
+        self.assertFalse(lock.exists())
 
     def test_bad_verdict_file_leaves_queue_and_log(self):
         self.seed("uncovered:src/a.py", "uncovered:src/b.py")

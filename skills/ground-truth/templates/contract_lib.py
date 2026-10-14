@@ -1852,7 +1852,8 @@ def check_no_banned_words(root: Path, data: dict) -> list[Issue]:
 
     exclude_hits = [0] * len(exclude_entries)
     for rel in tracked:
-        if _under_human_docs(rel):
+        # .ground-truth/ holds the hooks' own records (queue, batch log), not prose.
+        if _under_human_docs(rel) or rel.startswith(".ground-truth/"):
             continue
         excluded = False
         for i, (pat, _why) in enumerate(exclude_entries):

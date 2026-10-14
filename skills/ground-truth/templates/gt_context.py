@@ -478,8 +478,8 @@ def main(argv=None):
             if out["stale"]:
                 print("needs review: " + ", ".join(out["stale"][:8]))
         else:
-            if args.command == "check" and not (root / "STATUS.yaml").is_file():
-                # verify.py --mode=full counts a queue next to STATUS.yaml; this one is ours.
+            if args.command == "check":
+                # verify.py --mode=full counts the STATUS-class entries; the memory ones are ours.
                 live = {f"{cls}:{obj}" for cls, obj, _, _ in memory_findings(view)[0]}
                 out["pending"] = gt_pending.ci_problems(root, live, gt_pending.MEMORY_CLASSES)
                 out["ready"] = out["ready"] and not out["pending"]

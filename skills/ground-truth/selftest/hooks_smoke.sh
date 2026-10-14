@@ -946,9 +946,11 @@ fi
 
 # Case R5: the same shift with the cited line unchanged -- the Stop hook
 # repairs it itself before verify, says so in one line, warns about
-# nothing and counts the repair in the git dir for the next batch review.
+# nothing and counts the repair in the git dir for the next batch review
+# (gt_pending.py keeps that count).
 export ENFORCEMENT=blocking GT_VERIFY_EXIT=0
 setup_remap_repo
+cp "$TEMPLATES_DIR/gt_pending.py" "$REPO/tools/ground_truth/gt_pending.py"  # gt-allow: real install path, not prose
 shift_pricing_lines
 out=$(run_stop_hook false 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qx "ground-truth: auto-repaired 1 line refs in STATUS.yaml" \

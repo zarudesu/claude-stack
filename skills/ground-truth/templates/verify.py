@@ -39,13 +39,23 @@ def main(argv: list[str]) -> int:
         print(f"[FAIL] - : {exc}")
         return 3
 
-    # The deferred-drift queue may defer, not grow without bound or age. Only
-    # entries this run still finds count: a fix committed before Stop leaves its
-    # entry in the file. Memory entries are counted as they are.
+    # The deferred-drift queue may defer, not grow without bound or age. A
+    # finding queued and not escalated is reported, not failed; one outside the
+    # queue fails as before. Only entries this run still finds count: a fix
+    # committed before Stop leaves its entry in the file. Memory entries are
+    # gt_context.py check's.
     if args.mode == "full" and (Path(__file__).resolve().parent / "gt_pending.py").is_file():
         import gt_pending
-        lines = [f"[WARN] {issue.claim_id} : {issue.message}" for issue in issues]
-        live = {f"{cls}:{obj}" for cls, obj, _, _ in gt_pending.status_findings(root, lines)}
+        queued = gt_pending.load(root)[2]
+        live = set()
+        for n, issue in enumerate(issues):
+            if not any(p.search(issue.message) for p in gt_pending.STATUS_CLASSES.values()):
+                continue
+            for cls, obj, _, _ in gt_pending.status_findings(root, [f"[WARN] {issue.claim_id} : {issue.message}"]):
+                key = f"{cls}:{obj}"
+                live.add(key)
+                if issue.severity == "fail" and key in queued and not queued[key]["escalated"]:
+                    issues[n] = contract_lib.Issue("warn", issue.claim_id, issue.message)
         issues += [contract_lib.Issue("fail", "-", p)
                    for p in gt_pending.ci_problems(root, live, set(gt_pending.STATUS_CLASSES))]
 

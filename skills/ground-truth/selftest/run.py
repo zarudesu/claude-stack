@@ -2922,45 +2922,56 @@ def cited_line_scenarios() -> bool:
 
 
 def pending_queue_ci_scenario() -> bool:
-    """verify --mode=full fails on a queue over its total limit or with an escalated entry."""
+    """verify --mode=full: a queued finding warns, an unqueued or escalated one fails, the queue has a limit."""
     ok = True
     queue = FIXTURE / ".ground-truth" / "pending.yaml"
     queue.parent.mkdir(exist_ok=True)
 
-    # Memory entries (stale-area) count as they are: verify can not re-check them.
-    def entry(key: str, first: str, cls: str = "stale-area", batches: int = 0) -> dict:
+    def entry(key: str, first: str, cls: str = "uncovered", batches: int = 0) -> dict:
         return {"key": key, "area": "global", "class": cls, "first_seen": {"date": first, "rev": "-"},
                 "evidence": key, "batches_survived": batches}
 
+    def pending(*entries: dict) -> str:
+        return json.dumps({"pending": list(entries)})
+
+    fresh = "uncovered:services/fresh_mod.py"
     with added_file(FIXTURE / "tools" / "ground_truth" / "gt_pending.py", (TEMPLATES / "gt_pending.py").read_text()):
-        with added_file(queue, json.dumps({"pending": [entry(f"stale-area:m{i}", TODAY) for i in range(31)]})):
+        # Only the STATUS-class entries this run still reports count: the 31 files exist.
+        with contextlib.ExitStack() as stack:
+            for i in range(31):
+                stack.enter_context(added_file(FIXTURE / "services" / f"q{i}_mod.py", "Y = 2\n"))
+            stack.enter_context(added_file(queue, pending(*(entry(f"uncovered:services/q{i}_mod.py", TODAY)
+                                                            for i in range(31)))))
             cp = verify("full")
             ok &= record("pending: verify --mode=full exits 1 over the total queue limit",
                          cp.returncode == 1 and "pending queue has 31/30 entries" in out(cp), out(cp))
-        with added_file(queue, json.dumps({"pending": [entry("stale-area:old", "2000-01-01")]})):
-            cp = verify("full")
-            ok &= record("pending: verify --mode=full exits 1 on an escalated entry",
-                         cp.returncode == 1 and "pending stale-area:old escalated: first seen" in out(cp), out(cp))
-        with added_file(queue, json.dumps({"pending": [entry("stale-area:new", TODAY, batches=2)]})):
-            cp = verify("full")
-            ok &= record("pending: verify --mode=full exits 1 on an entry that survived max_batches reviews",
-                         cp.returncode == 1 and "pending stale-area:new escalated: survived 2 batch reviews" in out(cp),
-                         out(cp))
-        with added_file(queue, json.dumps({"pending": [entry("stale-area:new", TODAY)]})):
-            cp = verify("full")
-            ok &= record("pending: verify --mode=full stays green on a queue within limits", cp.returncode == 0, out(cp))
-        # A STATUS-class entry counts only while this run still reports it.
-        gone = entry("uncovered:services/gone_mod.py", "2000-01-01", "uncovered")
-        with added_file(queue, json.dumps({"pending": [gone]})):
+        with added_file(FIXTURE / "services" / "fresh_mod.py", "Y = 2\n"):
+            with added_file(queue, pending(entry(fresh, "2000-01-01"))):
+                cp = verify("full")
+                ok &= record("pending: verify --mode=full exits 1 on an escalated entry",
+                             cp.returncode == 1 and f"pending {fresh} escalated: first seen" in out(cp), out(cp))
+            with added_file(queue, pending(entry(fresh, TODAY, batches=2))):
+                cp = verify("full")
+                ok &= record("pending: verify --mode=full exits 1 on an entry that survived max_batches reviews",
+                             cp.returncode == 1 and f"pending {fresh} escalated: survived 2 batch reviews" in out(cp),
+                             out(cp))
+            with added_file(queue, pending(entry(fresh, TODAY))):
+                cp = verify("full")
+                ok &= record("pending: verify --mode=full reports a queued, not escalated finding as WARN, exit 0",
+                             cp.returncode == 0 and "[WARN]" in out(cp) and "fresh_mod.py" in out(cp), out(cp))
+            with added_file(queue, pending()):
+                cp = verify("full")
+                ok &= record("pending: verify --mode=full exits 1 on the same finding outside the queue",
+                             cp.returncode == 1 and "fresh_mod.py" in out(cp), out(cp))
+        with added_file(queue, pending(entry("uncovered:services/gone_mod.py", "2000-01-01"))):
             cp = verify("full")
             ok &= record("pending: verify --mode=full ignores an escalated entry whose finding is gone",
                          cp.returncode == 0, out(cp))
-        live = entry("uncovered:services/fresh_mod.py", "2000-01-01", "uncovered")
-        with added_file(queue, json.dumps({"pending": [live]})), \
-                added_file(FIXTURE / "services" / "fresh_mod.py", "Y = 2\n"):
+        # Memory entries are gt_context.py check's, not verify's.
+        with added_file(queue, pending(entry("stale-area:old", "2000-01-01", "stale-area"))):
             cp = verify("full")
-            ok &= record("pending: verify --mode=full counts an escalated entry whose finding is still there",
-                         "pending uncovered:services/fresh_mod.py escalated" in out(cp), out(cp))
+            ok &= record("pending: verify --mode=full leaves an escalated memory entry to gt_context check",
+                         cp.returncode == 0, out(cp))
     queue.parent.rmdir()
     return ok
 

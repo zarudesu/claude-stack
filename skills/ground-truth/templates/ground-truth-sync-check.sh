@@ -124,17 +124,17 @@ except Exception:
 [ -z "$mode" ] && mode=advisory
 
 # Trivial line shifts are repaired before verify reads STATUS.yaml: a quoted
-# citation moves to the one line holding its quote, any other one follows
-# the diff only when its line content is unchanged. The edit stays in the
-# working tree for the session to commit; the local count feeds the next
-# gt_pending.py batch. Anything left over is reported below as before.
+# citation moves to the one line equal to the base line holding its quote,
+# any other one follows the diff only when its line content is unchanged.
+# The edit stays in the working tree for the session to commit; the local
+# count feeds the next gt_pending.py batch. Anything left over is reported
+# below as before.
 remapper="$root/tools/ground_truth/remap_line_refs.py"
 if [ -f "$remapper" ]; then
   n=$(cd "$root" && "$py" "$remapper" --repair --base HEAD STATUS.yaml 2>/dev/null)
   if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
     echo "ground-truth: auto-repaired $n line refs in STATUS.yaml" >&2
-    counter="$(git -C "$root" rev-parse --absolute-git-dir)/ground-truth-auto-repaired"
-    echo $(( $(cat "$counter" 2>/dev/null || echo 0) + n )) > "$counter"
+    [ -f "$pending" ] && "$py" "$pending" --root "$root" repaired "$n"
   fi
 fi
 

@@ -6,6 +6,7 @@ Usage: python3 tools/ground_truth/gt_pending.py --root DIR record --session ID <
        python3 tools/ground_truth/gt_pending.py --root DIR summary
        python3 tools/ground_truth/gt_pending.py --root DIR batch --verdicts FILE
        python3 tools/ground_truth/gt_pending.py --root DIR report [--format md]
+       python3 tools/ground_truth/gt_pending.py --root DIR repaired N
 
 Stop blocks only on serious findings: every FAIL of verify --mode=sync and of
 the session guard (red touched check, raise without proof, debt closed without
@@ -20,18 +21,23 @@ remap_line_refs) are printed as before and never queued.
 
 A queue blocks Stop only when an area the working tree touches has more than
 limits.per_area entries or an escalated entry, and only under blocking
-enforcement; an unreadable queue exits 3 there. verify.py --mode=full fails on
-more than limits.total entries or on an entry escalated by age or batch
-reviews, counting only entries the current run still finds.
+enforcement; an unreadable queue exits 3 there. verify.py --mode=full reports
+a finding queued and not escalated as WARN, and fails on more than
+limits.total entries or on an entry escalated by age or batch reviews,
+counting only entries the current run still finds.
 
 batch applies the verdicts of a batch review and appends one block to
-.ground-truth/pending-log.yaml; report prints the queue, the last run's metrics,
-alarms and class recommendations (references/batch-review.md).
+.ground-truth/pending-log.yaml; an entry closed by a verdict other than Keep
+leaves a tombstone under `closed:`, so a finding that comes back keeps its age
+and counts as reopened. report prints the queue, the last run's metrics,
+alarms and class recommendations (references/batch-review.md). repaired adds
+the Stop hook's auto-repair count to the local counter batch logs.
 """
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+import contextlib
 from datetime import date
 import fnmatch
 import hashlib
@@ -42,6 +48,7 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 
 import yaml
 
@@ -50,8 +57,9 @@ MODEL = ".ground-truth/model.yaml"
 LOG = ".ground-truth/pending-log.yaml"
 SESSIONS = "ground-truth-pending-sessions.json"
 REPAIRED = "ground-truth-auto-repaired"  # next to SESSIONS; the Stop hook adds, batch logs and clears
+LOCK = "ground-truth-pending.lock"  # next to SESSIONS; held around every read-modify-write
 STORED = ("key", "area", "class", "first_seen", "evidence", "batches_survived", "kept")
-VERDICTS = ("Keep", "Update", "Consolidate", "Replace", "Delete")
+VERDICTS = ("Keep", "Update", "Consolidate", "Replace", "Delete")  # gt-allow: verdict name, not prose
 PLACEHOLDERS = {"", "-", "?", "...", "todo", "tbd", "n/a", "na", "none"}
 # Defaults; a `limits:` mapping at the top of the queue file overrides them.
 LIMITS = {"total": 30, "per_area": 5, "max_age_days": 7, "max_batches": 2, "max_sessions": 3}
@@ -108,7 +116,7 @@ def escalation(entry, limits, today, sessions=0):
         return f"{since} {age}d ago (> {limits['max_age_days']}d)"
     if entry.get("batches_survived", 0) >= limits["max_batches"]:
         return f"survived {entry['batches_survived']} batch reviews (>= {limits['max_batches']})"
-    if sessions >= limits["max_sessions"]:
+    if sessions >= limits["max_sessions"] and not entry.get("kept"):  # Keep accepts the repeats
         return f"seen in {sessions} sessions (>= {limits['max_sessions']})"
     return None
 
@@ -127,6 +135,35 @@ def _sessions(root):
     return data if isinstance(data, dict) else {}
 
 
+@contextlib.contextmanager
+def _locked(root):
+    """An O_EXCL lock file next to the sessions file; one left by a killed hook is taken over after 10s."""
+    lock = _sessions_path(root).with_name(LOCK)
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 10:
+                    lock.unlink()
+            except FileNotFoundError:
+                pass
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        lock.unlink(missing_ok=True)  # a holder past 10s may have lost it to a takeover
+
+
+def _repaired(path):
+    try:
+        return int(path.read_text())
+    except (OSError, ValueError):
+        return 0
+
+
 def _write(path, text):
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(text)
@@ -134,7 +171,7 @@ def _write(path, text):
 
 
 def _dump(data, limits, entries):
-    head = {"limits": limits, **({"classes": data["classes"]} if data.get("classes") else {})}
+    head = {"limits": limits, **{f: data[f] for f in ("classes", "closed", "reopened") if data.get(f)}}
     pending = [{f: entries[k][f] for f in STORED if f in entries[k]} for k in sorted(entries)]
     return yaml.safe_dump({**head, "pending": pending}, sort_keys=False, allow_unicode=True)
 
@@ -170,38 +207,48 @@ def load(root, local=False):
 
 def record(root, findings, classes, session, unjudged=lambda key: False):
     """Merge (class, object, area, evidence) findings; drop entries of `classes` not found,
-    except those `unjudged` says this run could not check."""
-    data, limits, entries, before = load(root)
-    ignored = {c for c, v in (data.get("classes") or {}).items() if v == "ignore"}
-    first = {"date": date.today().isoformat(), "rev": _git(root, "rev-parse", "--short", "HEAD").strip() or "-"}
-    added, seen = [], set()
-    for cls, obj, area, evidence in findings:
-        if cls in ignored:
-            continue
-        key = f"{cls}:{obj}"
-        seen.add(key)
-        entry = entries.get(key)
-        if entry is None:
-            entries[key] = {"key": key, "area": area, "class": cls, "first_seen": dict(first),
-                            "evidence": evidence[:160], "batches_survived": 0}
-            added.append(key)
-        else:
-            entry.update(area=area, evidence=evidence[:160])
-    resolved = sorted(k for k, e in entries.items() if e["class"] in classes and k not in seen and not unjudged(k))
-    for key in resolved:
-        del entries[key]
-    after = _dump(data, limits, entries)
-    if after != before and (before or entries):
-        path = Path(root) / QUEUE
-        path.parent.mkdir(exist_ok=True)
-        _write(path, after)
-    old = _sessions(root)
-    sessions = {k: list(v) for k, v in old.items() if k in entries}
-    for key in seen:
-        if session not in sessions.setdefault(key, []):
-            sessions[key].append(session)
-    if sessions != old:
-        _write(_sessions_path(root), json.dumps(sessions, sort_keys=True))
+    except those `unjudged` says this run could not check. A finding with a tombstone in
+    `closed` comes back with its first_seen and one more batch survived."""
+    with _locked(root):
+        data, limits, entries, before = load(root)
+        ignored = {c for c, v in (data.get("classes") or {}).items() if v == "ignore"}
+        closed = data["closed"] = data.get("closed") or {}
+        first = {"date": date.today().isoformat(), "rev": _git(root, "rev-parse", "--short", "HEAD").strip() or "-"}
+        added, seen = [], set()
+        for cls, obj, area, evidence in findings:
+            if cls in ignored:
+                continue
+            key = f"{cls}:{obj}"
+            seen.add(key)
+            entry = entries.get(key)
+            if entry is None:
+                tomb = closed.pop(key, None)
+                entries[key] = {"key": key, "area": area, "class": cls,
+                                "first_seen": tomb["first_seen"] if tomb else dict(first),
+                                "evidence": evidence[:160], "batches_survived": tomb["batches_survived"] + 1 if tomb else 0}
+                if tomb:
+                    data["reopened"] = data.get("reopened", 0) + 1
+                else:
+                    added.append(key)
+            else:
+                entry.update(area=area, evidence=evidence[:160])
+        resolved = sorted(k for k, e in entries.items() if e["class"] in classes and k not in seen and not unjudged(k))
+        for key in resolved:
+            del entries[key]
+        for key in [k for k in closed if k.split(":")[0] in classes and k not in seen and not unjudged(k)]:
+            del closed[key]
+        after = _dump(data, limits, entries)
+        if after != before and (before or entries):
+            path = Path(root) / QUEUE
+            path.parent.mkdir(exist_ok=True)
+            _write(path, after)
+        old = _sessions(root)
+        sessions = {k: list(v) for k, v in old.items() if k in entries}
+        for key in seen:
+            if session not in sessions.setdefault(key, []):
+                sessions[key].append(session)
+        if sessions != old:
+            _write(_sessions_path(root), json.dumps(sessions, sort_keys=True))
     for verb, keys in (("queued", sorted(added)), ("resolved", resolved)):
         if keys:
             more = f" (+{len(keys) - 5} more)" if len(keys) > 5 else ""
@@ -318,8 +365,8 @@ def _verdict_problem(item, entries, given, claims):
         return f"verdict must be one of {', '.join(VERDICTS)}"
     if not isinstance(evidence, str) or evidence.strip().lower() in PLACEHOLDERS:
         return "evidence is empty or a placeholder"
-    if verdict == "Consolidate" and (item.get("into") not in entries or item["into"] == key):
-        return "Consolidate needs into: <another queued key>"
+    if verdict == "Consolidate" and (item.get("into") not in entries or item["into"] == key):  # gt-allow: verdict name
+        return "Consolidate needs into: <another queued key>"  # gt-allow: verdict name, not prose
     if verdict == "Replace" and not set(re.findall(r"STATUS\.yaml#([\w.-]+)", evidence)) & claims:
         return "Replace evidence must name STATUS.yaml#<id> of an existing claim"
     if item.get("noise") and verdict != "Delete":
@@ -329,6 +376,11 @@ def _verdict_problem(item, entries, given, claims):
 
 def batch(root, verdicts_file):
     """Apply batch-review verdicts all or nothing and append one block to the log; 1 on a bad verdict."""
+    with _locked(root):
+        return _batch(root, verdicts_file)
+
+
+def _batch(root, verdicts_file):
     data, limits, entries, _ = load(root)
     items = yaml.safe_load(Path(verdicts_file).read_text()) or []
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
@@ -351,10 +403,7 @@ def batch(root, verdicts_file):
     verdicts, closed, noise, carried = Counter(), Counter(), Counter(), 0
     escalated = Counter(e["class"] for e in entries.values() if e["escalated"])
     repaired = _sessions_path(root).with_name(REPAIRED)
-    try:
-        auto_repaired = int(repaired.read_text())
-    except (OSError, ValueError):
-        auto_repaired = 0
+    tombs = data.get("closed") or {}
     for key in sorted(before):
         entry, item = entries[key], given.get(key)
         if item is None:
@@ -366,6 +415,7 @@ def batch(root, verdicts_file):
             entry.update(kept={"date": today.isoformat(), "evidence": item["evidence"][:160]}, batches_survived=0)
             continue
         del entries[key]
+        tombs[key] = {"first_seen": entry["first_seen"], "batches_survived": entry.get("batches_survived", 0)}
         closed[entry["class"]] += 1
         noise[entry["class"]] += bool(item.get("noise"))
     ages = [_age(e, today) for e in entries.values()] or [0]
@@ -375,7 +425,8 @@ def batch(root, verdicts_file):
              "verdicts": {v: verdicts[v] for v in VERDICTS}, "closed": dict(closed),
              "noise": {c: n for c, n in noise.items() if n}, "escalated": dict(escalated), "carried": carried,
              "age": {"median": statistics.median_low(ages), "max": max(ages)},
-             "auto_repaired": auto_repaired}
+             "auto_repaired": _repaired(repaired), "reopened": data.pop("reopened", 0)}
+    data["closed"] = dict(sorted(tombs.items()))
     _write(Path(root) / QUEUE, _dump(data, limits, entries))
     old = (Path(root) / LOG).read_text() if log else ""
     _write(Path(root) / LOG, old + yaml.safe_dump([block], sort_keys=False, allow_unicode=True))
@@ -402,7 +453,8 @@ def report(root, fmt="text"):
                f"auto-repaired {repaired}/{repaired + sum(last['closed'].values())} of repaired or closed by verdict, "
                f"carried without verdict "
                f"{last['carried']}/{last['carried'] + decided}, Delete as noise {sum(last['noise'].values())}/{decided}",
-               "verdicts: " + ", ".join(f"{v} {n}" for v, n in last["verdicts"].items())]
+               "verdicts: " + ", ".join(f"{v} {n}" for v, n in last["verdicts"].items())
+               + f"; reopened after a verdict {last.get('reopened', 0)}"]
     if len(log) >= 2 and all(b["flow"]["out"] < b["flow"]["in"] for b in log[-2:]):
         alarms.append("outflow below inflow in the last 2 batch reviews: the queue grows, owner decision needed")
     recent = log[-4:]
@@ -425,10 +477,11 @@ def report(root, fmt="text"):
 
 
 def ci_problems(root, live, classes):
-    """FAIL lines for CI: total limit exceeded or an entry escalated. Entries of `classes`
-    count only when `live`, the keys this run found, still has them."""
-    _, limits, entries, _ = load(root)
-    entries = {k: e for k, e in entries.items() if e["class"] not in classes or k in live}
+    """FAIL lines for CI: total limit exceeded or an entry escalated. Only entries of `classes`
+    count, and only while `live`, the keys this run found, still has them; ignored classes never do."""
+    data, limits, entries, _ = load(root)
+    ignored = {c for c, v in (data.get("classes") or {}).items() if v == "ignore"}
+    entries = {k: e for k, e in entries.items() if e["class"] in classes and e["class"] not in ignored and k in live}
     problems = []
     if len(entries) > limits["total"]:
         problems.append(f"pending queue has {len(entries)}/{limits['total']} entries; run the batch review of {QUEUE}")
@@ -445,6 +498,7 @@ def main(argv=None):
     commands.add_parser("summary")
     commands.add_parser("batch").add_argument("--verdicts", type=Path, required=True)
     commands.add_parser("report").add_argument("--format", choices=("text", "md"), default="text")
+    commands.add_parser("repaired").add_argument("count", type=int)
     args = parser.parse_args(argv)
     try:
         if args.command == "record":
@@ -459,6 +513,11 @@ def main(argv=None):
             return batch(args.root, args.verdicts)
         if args.command == "report":
             report(args.root, args.format)
+            return 0
+        if args.command == "repaired":
+            with _locked(args.root):
+                path = _sessions_path(args.root).with_name(REPAIRED)
+                _write(path, f"{_repaired(path) + args.count}\n")
             return 0
         summary(args.root)
         return 0
