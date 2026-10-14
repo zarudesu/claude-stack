@@ -341,10 +341,14 @@ def report(root: Path, plan: dict, skill: Path | None = None) -> list[str]:
         print(f"comment not carried over: {line}")
     for line in plan["warns"]:
         print(f"WARN {line}")
-    listed = subprocess.run(["git", "grep", "-l", "-F", STATUS], cwd=root, capture_output=True, text=True)
+    listed = subprocess.run(["git", "grep", "-I", "-n", "-F", STATUS], cwd=root, capture_output=True, text=True)
     # Installed tools read either layout; a repo's own probes may not, and verify runs them.
-    by_hand = [p for p in listed.stdout.splitlines()
-               if p != STATUS and os.path.dirname(p) != "tools/ground_truth"]
+    # The installed CI job names STATUS.yaml only in its remap_line_refs.py call, which reads
+    # either layout, and in the comment above it.
+    by_hand = list(dict.fromkeys(
+        p for p, _, text in (line.split(":", 2) for line in listed.stdout.splitlines())
+        if p != STATUS and (p.startswith("tools/ground_truth/probes/") or not p.startswith("tools/ground_truth/"))
+        and "remap_line_refs.py" not in text and "citations in STATUS.yaml that this diff shifted" not in text))
     if skill:
         # A file shipped by the skill as is already reads either layout.
         shipped = {t.read_bytes() for t in (skill / "templates").rglob("*") if t.is_file()}

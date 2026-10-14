@@ -3562,6 +3562,18 @@ def migrate_scenarios() -> bool:
         f"old={out(cp_old)} skip={out(cp_skip)} dirty={out(cp_dirty)} args={out(cp_args)} none={out(cp_none)}",
     )
 
+    # (7) The installed CI job and anything under tools/ground_truth/ other than probes are not "edit by hand".
+    ci = prepare(SCRATCH_BASE / "migrate-ci", files={
+        ".github/workflows/ci.yml": (TEMPLATES / "ci-github.yml").read_text(),
+        "tools/ground_truth/__pycache__/gt_store.cpython-311.pyc": "STATUS.yaml\x00",
+        "docs/notes.md": "see STATUS.yaml\n"})
+    git(ci, "add", "-f", "tools/ground_truth/__pycache__")
+    git(ci, "commit", "-qm", "tracked bytecode")
+    cp = migrate(ci)
+    by_hand = next((line for line in cp.stdout.splitlines() if "edit by hand:" in line), "")
+    ok &= record("migrate: edit-by-hand list skips the CI job and tools/ground_truth/**, keeps the rest",
+                 by_hand.endswith("edit by hand: docs/notes.md, tests/test_status_contract.py"), out(cp))
+
     # (6) Staging: a contract without debt and an edited model.yaml are staged whole; a failed git add is an error.
     nodebt = prepare(SCRATCH_BASE / "migrate-nodebt", lambda t: t[:t.index("\ndebt:\n") + 1])
     cp = migrate(nodebt, "--write")
