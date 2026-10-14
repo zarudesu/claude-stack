@@ -1,8 +1,10 @@
 <!-- Installer: replace {{PY}} with this project's interpreter. -->
 # Project memory: use, change, hand off
 
-Start with `{{PY}} tools/ground_truth/gt_context.py list`, choose the task's
-areas, then `{{PY}} tools/ground_truth/gt_context.py context --area ID`.
+Start with `{{PY}} tools/ground_truth/gt.py context --path <task files>` (or
+`--area ID`): pointers to the claims, docs and consumers; do not trust its
+"drifted" block. For the canonical documents, checks and unknowns of an area,
+`{{PY}} tools/ground_truth/gt_context.py context --area ID`.
 Use only a fresh, complete packet for trusted context. It contains canonical
 knowledge, dependencies, consumers, reusable entrypoints, checks and unknowns.
 Read the implementation you change; do not rediscover the entire project.

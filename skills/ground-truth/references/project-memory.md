@@ -100,14 +100,14 @@ python3 tools/ground_truth/gt.py show billing-refund                  # claim, a
 --root ROOT ставится перед подкомандой; можно явно выбрать общий корень.
 
 ```sh
-python3 tools/ground_truth/gt_context.py list
 python3 tools/ground_truth/gt_context.py status --brief
-python3 tools/ground_truth/gt_context.py context --area billing --area api
+python3 tools/ground_truth/gt_context.py context --area billing --area api   # тела документов
 python3 tools/ground_truth/gt_context.py check
 python3 tools/ground_truth/gt_context.py refresh --area billing --reviewed --expect REV --evidence "review details and actual checks"
 ```
 
-list — дешёвая по выводу маршрутизация, не свидетельство готовности.
+Маршрут к областям — `gt context` выше; `gt_context.py list` (JSON всех
+областей) — не свидетельство готовности.
 status/check: exit 0 готовые fingerprints всего реестра; 1 stale/gaps; 2
 ошибка/нет модели. status выдаёт revision; подробности области — context repair.
 Нет модели не равняется «нечего проверять». STATUS не заменяет model.

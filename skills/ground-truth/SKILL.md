@@ -30,7 +30,7 @@ SKILL.md или первой сессии само по себе не являе
   [организацию знаний](references/doc-model-bridge.md).
 - `context`: начинается задача или передача PM. `gt context --path <файлы задачи>`
   (или `--area ID`) даёт до 15 claim'ов; блоку «drifted, do not trust» не верить.
-  С моделью — `gt_context.py list`, выбрать области, затем
+  С моделью тела канонических документов, проверки и unknowns области —
   `gt_context.py context --area ID`. При stale/неполном пакете — адресный sync.
   Прочитать [сопровождение и handoff](references/process.md).
 - `sync`: после изменения кода, документации, требований, конфигурации или связей.

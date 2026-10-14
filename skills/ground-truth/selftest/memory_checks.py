@@ -1345,6 +1345,12 @@ class PacketChecks(unittest.TestCase):
         usage = self.usage()
         self.assertEqual((usage["since"], usage["last"]["small_a"], len(usage["last"])), ("2026-03-01", "2026-03-03", 15))
 
+    def test_memory_context_records_use_of_the_selected_areas_claims(self):
+        with mock.patch.dict(os.environ, {"GT_TODAY": "2026-03-01"}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(memory.main(["--root", str(self.repo), "context", "--area", "small"]), 0, err.getvalue())
+        self.assertEqual(self.usage(), {"since": "2026-03-01", "last": {"small_a": "2026-03-01"}})
+
     def test_unwritable_usage_record_never_costs_the_output(self):
         import gt_usage
         (self.repo / ".git" / "ground-truth-usage.json").write_text("{")

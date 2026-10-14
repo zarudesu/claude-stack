@@ -2726,7 +2726,7 @@ def i9_portability_scenarios() -> bool:
         and i9_install.MEMORY_SKIP not in cp_write.stdout
         and (repo / "tools" / "ground_truth" / "gt_context.py").is_file()
         and "python3 tools/ground_truth/gt_context.py check" in ci_text
-        and rule.is_file() and "gt_context.py list" in rule.read_text(),
+        and rule.is_file() and "gt_context.py context --area" in rule.read_text(),
         f"write={out(cp_write)} ci={ci_text}",
     )
 

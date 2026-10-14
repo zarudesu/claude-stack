@@ -353,6 +353,21 @@ def packet(view, selected, max_chars):
     return out
 
 
+def touch_claims(view, selected):
+    """Record use of the contract claims in the selected areas, best effort (gt_usage.py)."""
+    import gt_packet, gt_store, gt_usage  # gt_packet imports this module
+    for repo in sorted({Path(view["repositories"][view["nodes"][a]["repo"]]) for a in selected}):
+        try:
+            if not gt_store.contract_files(repo):
+                continue
+            claims = gt_packet._claims(repo, gt_store.load(repo))
+        except (gt_store.ContractError, OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"gt_context.py context: usage not recorded: {exc}", file=sys.stderr)
+            continue
+        gt_usage.touch_or_warn("gt_context.py context", repo,
+                               [cid for cid, (_, area, _) in claims.items() if area in selected])
+
+
 def refresh(root, selected, expected, evidence, prune=False):
     """Explicit semantic attestation, bound to reviewed input content; never called by a hook."""
     lock = root / (RECEIPTS + ".lock")
@@ -450,6 +465,7 @@ def main(argv=None):
                 out.update(fresh=False, packet_complete=False, documents=[],
                            error="inputs changed while building context; request a fresh packet")
             print(json.dumps(out, ensure_ascii=False, indent=1))
+            touch_claims(view, set(args.area))
             return 0 if out["fresh"] and out["packet_complete"] else 1
         out = summary(view)
         if args.command == "hook":
@@ -466,7 +482,7 @@ def main(argv=None):
                 print(f"ground-truth memory: ready={out['ready']}; {len(view['areas'])} areas; "
                       f"stale={','.join(out['stale'][:8]) or '-'}; "
                       f"unclassified={sum(map(len, out['gaps'].values()))}; "
-                      "use gt_context.py list then context --area ID. Never auto-refresh receipts.",
+                      "use gt context --path <task files> or --area ID. Never auto-refresh receipts.",
                       file=sys.stderr if args.event == "stop" else sys.stdout)
             if foreign_queue(root):
                 if args.event == "start":
@@ -480,7 +496,7 @@ def main(argv=None):
         if args.command == "status" and args.brief:
             print(f"ground-truth memory: {len(view['areas'])} areas, {len(out['stale'])} stale, "
                   f"{sum(map(len, out['gaps'].values()))} unclassified files; "
-                  "use gt_context.py list, then context --area ID before assigning work")
+                  "use gt context --area ID before assigning work")
             if out["stale"]:
                 print("needs review: " + ", ".join(out["stale"][:8]))
         else:
