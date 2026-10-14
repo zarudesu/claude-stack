@@ -56,6 +56,10 @@ def main(argv: list[str]) -> int:
 
     fails = [issue for issue in issues if issue.severity == "fail"]
     warns = [issue for issue in issues if issue.severity != "fail"]
+    # gt context marks a claim path changed since this green run.
+    if args.mode == "sync" and not fails and (here / "gt_packet.py").is_file():
+        import gt_packet
+        gt_packet.write_digests(root)
 
     for issue in fails:
         print(f"[FAIL] {issue.claim_id} : {issue.message}")

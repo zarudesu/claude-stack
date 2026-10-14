@@ -168,8 +168,10 @@ def closure(seeds, nodes, reverse=False):
     return seen
 
 
-def inspect(root):
+def inspect(root, areas=None):
+    """areas: hash only these ids and their dependencies; None means every area."""
     model, nodes, state = load(root)
+    wanted = closure(areas, nodes) if areas is not None else set(nodes)
     files, locations, errors, gaps = {}, {}, {}, {}
     common_dirs = {}
     for rid, spec in model["repositories"].items():
@@ -203,6 +205,8 @@ def inspect(root):
             errors[rid], files[rid], gaps[rid] = str(exc), set(), []
     own, inputs, local_errors = {}, {}, {}
     for cid, node in nodes.items():
+        if cid not in wanted:
+            continue
         rid, selected = node["repo"], {}
         problems = [errors[rid]] if rid in errors else []
         repo = Path(locations[rid])
@@ -229,9 +233,11 @@ def inspect(root):
         # only if all declared content, scope and dependency definitions match.
         scope = {k: v for k, v in model["repositories"][rid].items() if k != "path"}
         own[cid] = digest({"node": node, "repository_scope": scope, "inputs": selected})
-    stamps = {cid: digest({d: own[d] for d in sorted(closure([cid], nodes))}) for cid in nodes}
+    stamps = {cid: digest({d: own[d] for d in sorted(closure([cid], nodes))}) for cid in wanted}
     areas = {}
     for cid, node in nodes.items():
+        if cid not in wanted:
+            continue
         previous = state["areas"].get(cid, {})
         if not isinstance(previous, dict):
             raise ValueError(f"invalid review receipt for {cid}")

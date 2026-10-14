@@ -1064,5 +1064,124 @@ class BatchReviewChecks(unittest.TestCase):
         self.assertRegex(self.out("summary"), r"; batch review due: no batch review for \d+d, 1 escalated\n")
 
 
+
+class PacketChecks(unittest.TestCase):
+    """gt context on a sharded contract with 200 claims in one area and a model.yaml receipt."""
+
+    def setUp(self):
+        import gt_packet
+        self.packet = gt_packet
+        self.temp = tempfile.TemporaryDirectory(prefix="gt-packet-test-")
+        self.repo = repo = Path(self.temp.name)
+        for i in range(200):
+            (repo / f"src/big/f{i:03}.py").parent.mkdir(parents=True, exist_ok=True)
+            (repo / f"src/big/f{i:03}.py").write_text(f"VALUE = {i}\n")
+        (repo / "src/small").mkdir()
+        (repo / "src/small/a.py").write_text("A = 1\n")
+        (repo / "lib").mkdir()
+        (repo / "lib/free.py").write_text("FREE = 1\n")
+        (repo / "docs").mkdir()
+        (repo / "docs/big.md").write_text("big area\n")
+        (repo / "docs/small.md").write_text("small area\n")
+        store = repo / ".ground-truth/areas"
+        store.mkdir(parents=True)
+        (repo / ".ground-truth/contract.yaml").write_text("schema_version: 1\nmeta:\n  enforcement: advisory\nedges: []\n")
+        (repo / ".ground-truth/debt.yaml").write_text(
+            "debt:\n  - id: d1\n    ref: c003\n    description: x\n    severity: normal\n    state: open\n    owner: ''\n"
+            "    opened: '2026-01-01'\n")
+        claims = [{"id": f"c{i:03}", "kind": "status", "status": "implemented" if i % 2 else "partial",
+                   "path": f"src/big/f{i:03}.py", "check": f"tests/test_big.py::test_{i}"} for i in range(200)]
+        claims[150]["canary"] = True
+        claims += [{"id": "gone", "kind": "status", "status": "implemented", "canary": True, "path": "src/big/gone.py"},
+                   {"id": "quoted", "kind": "status", "status": "implemented", "canary": True, "path": "src/big/f001.py",
+                    "note": "reads src/big/f001.py:1 «VALUE = 999»"}]
+        (store / "big.yaml").write_text(yaml.safe_dump({"area": "big", "sources": ["src/big"], "claims": claims},
+                                                       sort_keys=False))
+        (store / "small.yaml").write_text(yaml.safe_dump({"area": "small", "sources": ["src/small"], "claims": [
+            {"id": "small_a", "kind": "status", "status": "implemented", "path": "src/small/a.py"}]}, sort_keys=False))
+        (store / "free.yaml").write_text(yaml.safe_dump({"area": "free", "sources": ["lib"], "claims": [
+            {"id": "free_a", "kind": "status", "status": "implemented", "path": "lib/free.py"}]}, sort_keys=False))
+        model = {"version": 1, "repositories": {"app": {"path": ".", "watch": ["src", "docs"]}},
+                 "areas": [{"id": area, "repo": "app", "summary": f"{area} area " + "x" * 200,
+                            "sources": [f"src/{area}"], "docs": [f"docs/{area}.md"],
+                            "depends_on": ["small"] if area == "big" else []} for area in ("big", "small")]}
+        (repo / memory.MODEL).write_text(yaml.safe_dump(model, sort_keys=False))
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+        view = memory.inspect(repo)
+        memory.refresh(repo, list(view["nodes"]), view["revision"], "fixture review")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def context(self, *args):
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            rc = self.packet.main(["--root", str(self.repo), *args])
+        self.assertEqual(rc, 0, err.getvalue())
+        return out.getvalue()
+
+    def test_packet_is_capped_and_says_what_it_cut(self):
+        text = self.context("--area", "big")
+        lines = text.splitlines()
+        pointers = [l for l in lines if l.startswith("  ") and not l.startswith(("  summary:", "  docs:", "  consumers:"))]
+        self.assertLessEqual(len(lines), 150, text)
+        self.assertEqual(len(pointers), 15, text)
+        self.assertIn("+187 more: gt context --area big --all\n", text)
+        self.assertIn("area big [receipt fresh] claims 202 shown 15 | debt open 1 | pending 0\n", text)
+        summary = next(l for l in lines if l.startswith("  summary: "))
+        self.assertLessEqual(len(summary) - len("  summary: "), 120)
+        self.assertIn("  docs: docs/big.md\n", text)
+        self.assertNotIn("big area\n", text)  # a doc body is never printed
+        everything = self.context("--area", "big", "--all")
+        self.assertNotIn("more:", everything)
+        self.assertEqual(len(everything.splitlines()), 202 + 5)
+
+    def test_drifted_claims_are_never_facts(self):
+        packet = json.loads(self.context("--area", "big", "--json"))
+        facts = [f["id"] for a in packet["areas"] for f in a["facts"]]
+        self.assertEqual({d["id"]: d["reason"] for d in packet["drifted"]},
+                         {"gone": "src/big/gone.py missing",
+                          "quoted": "cited line src/big/f001.py:1 does not contain «VALUE = 999»"})
+        self.assertEqual(facts[0], "c150")  # canary and nothing on the path ranks first
+        self.assertNotIn("gone", facts)
+        self.assertNotIn("quoted", facts)
+        packet = json.loads(self.context("--path", "src/big/f004.py", "--json"))
+        self.assertEqual(packet["areas"][0]["facts"][0]["id"], "c004")  # exact path first
+        (self.repo / "src/small/a.py").write_text("A = 2\n")
+        packet = json.loads(self.context("--path", "src/big/f004.py", "src/small/a.py", "--json"))
+        self.assertIn({"id": "small_a", "area": "small", "reason": "area receipt stale"}, packet["drifted"])
+        self.assertIn({"id": "c004", "area": "big", "reason": "area receipt stale"}, packet["drifted"])  # big depends on small
+        self.assertEqual([f for a in packet["areas"] for f in a["facts"]], [])
+
+    def test_same_checkout_same_bytes_and_json_has_the_same_content(self):
+        first = self.context("--path", "src/big/f010.py")
+        self.assertEqual(self.context("--path", "src/big/f010.py"), first)
+        packet = json.loads(self.context("--path", "src/big/f010.py", "--json"))
+        self.assertEqual(self.packet.render(packet), first)
+        self.assertEqual(sorted(packet), ["areas", "drifted", "layout", "more", "query", "rev"])
+
+    def test_changed_since_last_green_verify_is_marked_not_drifted(self):
+        # lib/ is outside the model's watch: no receipt, so an edit does not make free_a drifted.
+        self.packet.write_digests(self.repo)
+        self.assertNotIn("changed since", self.context("--path", "lib/free.py"))
+        (self.repo / "lib/free.py").write_text("FREE = 2\n")
+        text = self.context("--path", "lib/free.py")
+        self.assertIn("area free [no receipt] claims 1 shown 1 | debt open 0 | pending 0\n"
+                      "  free_a implemented lib/free.py (changed since last green verify)\n", text)
+        self.assertNotIn("drifted", text)
+
+    def test_show_prints_one_entry_whole(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.packet.show_main(["--root", str(self.repo), "quoted"]), 0)
+        self.assertIn("note: \"reads src/big/f001.py:1 \\xABVALUE = 999\\xBB\"", out.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.packet.show_main(["--root", str(self.repo), "area:small"]), 0)
+        self.assertEqual(yaml.safe_load(out.getvalue())["claims"], ["small_a"])
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.packet.show_main(["--root", str(self.repo), "src/nothing.py"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

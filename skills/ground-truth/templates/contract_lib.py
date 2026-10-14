@@ -2438,48 +2438,55 @@ def check_cited_lines(root: Path, data: dict, mode: str) -> list[Issue]:
     for claim in data.get("claims") or []:
         if not isinstance(claim, dict):
             continue
-        note = claim.get("note")
-        if not isinstance(note, str):
-            continue
-        cid = claim.get("id", "-")
-        for m in _CITE_RE.finditer(note):
-            window = note[m.end() : m.end() + 120].split(";", 1)[0]
-            qm = _QUOTE_RE.search(window)
-            if not qm:
-                continue
-            quote = next((g for g in qm.groups() if g is not None), "").strip()
-            if not quote:
-                continue
-            path = m.group("path")
-            line_no = int(m.group("line"))
-            line_end_raw = m.group("line_end")
-            line_end = int(line_end_raw) if line_end_raw and int(line_end_raw) >= line_no else None
-            full = _within_root(root, path)
-            if full is None or not full.is_file():
-                continue
-            try:
-                lines = full.read_text(errors="replace").splitlines()
-            except OSError:
-                continue
-            if line_end is not None:
-                last = min(line_end, len(lines))
-                if any(quote in lines[n - 1].strip() for n in range(line_no, last + 1)):
-                    continue
-                label = f"{path}:{line_no}-{line_end}"
-            else:
-                if 1 <= line_no <= len(lines) and quote in lines[line_no - 1].strip():
-                    continue
-                label = f"{path}:{line_no}"
-            shown = quote if len(quote) <= 60 else quote[:60]
+        for problem in cited_line_problems(root, claim):
             issues.append(
                 Issue(
                     severity,
-                    cid,
-                    f"cited line {label} does not contain «{shown}»; fix: run "
+                    claim.get("id", "-"),
+                    f"{problem}; fix: run "
                     "tools/ground_truth/remap_line_refs.py --repair or update the note",
                 )
             )
     return issues
+
+
+def cited_line_problems(root: Path, claim: dict) -> list[str]:
+    """One claim's quoted file:line citations whose line no longer holds the quote."""
+    note = claim.get("note")
+    if not isinstance(note, str):
+        return []
+    problems: list[str] = []
+    for m in _CITE_RE.finditer(note):
+        window = note[m.end() : m.end() + 120].split(";", 1)[0]
+        qm = _QUOTE_RE.search(window)
+        if not qm:
+            continue
+        quote = next((g for g in qm.groups() if g is not None), "").strip()
+        if not quote:
+            continue
+        path = m.group("path")
+        line_no = int(m.group("line"))
+        line_end_raw = m.group("line_end")
+        line_end = int(line_end_raw) if line_end_raw and int(line_end_raw) >= line_no else None
+        full = _within_root(root, path)
+        if full is None or not full.is_file():
+            continue
+        try:
+            lines = full.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        if line_end is not None:
+            last = min(line_end, len(lines))
+            if any(quote in lines[n - 1].strip() for n in range(line_no, last + 1)):
+                continue
+            label = f"{path}:{line_no}-{line_end}"
+        else:
+            if 1 <= line_no <= len(lines) and quote in lines[line_no - 1].strip():
+                continue
+            label = f"{path}:{line_no}"
+        shown = quote if len(quote) <= 60 else quote[:60]
+        problems.append(f"cited line {label} does not contain «{shown}»")
+    return problems
 
 
 def run(root: Path, mode: str, execute: bool = True) -> list[Issue]:

@@ -48,6 +48,7 @@ TOOLS_FILES = [
     "gt_pending.py",
     "gt.py",
     "gt_migrate.py",
+    "gt_packet.py",
 ]
 EXAMPLE_PROBE = "example_probe.py"
 HOOK_FILES = [
