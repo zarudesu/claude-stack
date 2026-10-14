@@ -16,7 +16,8 @@ same value is written with yaml.safe_dump instead. A model.yaml source
 STATUS.yaml is dropped and the receipts of those areas, if fresh before,
 are refreshed.
 
-Exit 0: migrated, or already sharded. 1: not equivalent, rolled back.
+Exit 0: migrated, or already sharded. 1: not equivalent, rolled back, or
+already sharded and verify --mode=full (no check executed) reports a FAIL.
 2: bad arguments. 3: contract error, mixed or missing layout, failed precheck,
 a repo probe that still names STATUS.yaml (--write only), git add failed.
 """
@@ -462,7 +463,11 @@ def main(argv: list[str]) -> int:
         layout = gt_store.detect_layout(root)
         if layout == gt_store.SHARDED:
             print(f"already migrated ({gt_store.META})")
-            return 0
+            # An interrupted --write leaves shards nobody checked: E2 on what is there now.
+            fails = [i for i in contract_lib.run(root, "full", execute=False) if i.severity == "fail"]
+            for issue in fails:
+                print(f"  [FAIL] {issue.claim_id} : {issue.message}")
+            return 1 if fails else 0
         if layout == gt_store.NONE:
             raise ContractError(f"no {STATUS} at {root}")
         if (root / gt_store.DEBT).exists() or list((root / gt_store.AREAS).glob("*.yaml")):

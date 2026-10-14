@@ -3453,6 +3453,10 @@ def migrate_scenarios() -> bool:
     migrate(twin, "--write")
     ok &= record("migrate: two runs on the same input write the same bytes",
                  shards(twin) == shards(blocking) and len(shards(blocking)) > 3, sorted(shards(twin)))
+    with patched(twin / ".ground-truth/areas/global.yaml", "  kind: live_state\n", "  kind: bogus\n"):
+        cp = migrate(twin, "--write")
+    ok &= record("migrate: rerun on a sharded layout verify --mode=full fails -> rc 1 naming the FAIL",
+                 cp.returncode == 1 and "already migrated" in cp.stdout and "[FAIL]" in cp.stdout, out(cp))
 
     # (2) roots ['.'], claims with several paths, a group over --max-claims split by directory.
     paths = prepare(SCRATCH_BASE / "migrate-paths", lambda t: t.replace(
