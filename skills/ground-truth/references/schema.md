@@ -20,7 +20,7 @@
 | legacy | `STATUS.yaml` в корне | `1` |
 | sharded | `.ground-truth/contract.yaml` (`schema_version`, `meta`, `edges`), `.ground-truth/areas/<id>.yaml` (`area`, `sources`, `claims`), `.ground-truth/debt.yaml` (`debt`) | `2` |
 
-Другая версия — FAIL `schema_version must be <N>`. В sharded: имя файла области — `[a-z0-9][a-z0-9._-]*`, `area:` внутри равно имени файла, id claim'а уникален по всем областям (дубль — FAIL с обоими файлами), других ключей в файлах нет. `STATUS.yaml` и `.ground-truth/contract.yaml` одновременно — смешанная раскладка: любой инструмент отказывает с exit 3, пока лишний файл не удалён. Перенос legacy → sharded — `gt migrate --write` (I.11 при init); дальше в этом файле «STATUS.yaml» значит «контракт в текущей раскладке».
+Другая версия — FAIL `schema_version must be <N>`. В sharded: имя файла области — `[a-z0-9][a-z0-9._-]*`, `area:` внутри равно имени файла, id claim'а уникален по всем областям (дубль — FAIL с обоими файлами), других ключей в файлах нет; любой другой файл в `areas/` (`x.yml`, `sub/x.yaml`; кроме dot-файлов) не читается и даёт FAIL. `STATUS.yaml` и `.ground-truth/contract.yaml` одновременно — смешанная раскладка: любой инструмент отказывает с exit 3, пока лишний файл не удалён. Перенос legacy → sharded — `gt migrate --write` (I.11 при init); дальше в этом файле «STATUS.yaml» значит «контракт в текущей раскладке».
 
 | Ключ | Обязателен | Тип | Описание |
 |---|---|---|---|

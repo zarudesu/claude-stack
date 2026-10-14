@@ -3128,6 +3128,21 @@ def sharded_layout_scenarios() -> bool:
             out(cp)[-1500:],
         )
 
+    # (7d) A file in areas/ that is not a top-level <area>.yaml is never read: FAIL naming it.
+    (areas / "sub").mkdir()
+    try:
+        with added_file(areas / "x.yml", "area: x\nclaims: []\n"), \
+                added_file(areas / "sub" / "x.yaml", "area: x\nclaims: []\n"):
+            cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)
+    finally:
+        (areas / "sub").rmdir()
+    ok &= record(
+        "layout: areas/x.yml and areas/sub/x.yaml -> one FAIL each naming the file, exit 1",
+        cp.returncode == 1 and all(f"[FAIL] - : .ground-truth/areas/{rel}: not read; " in out(cp)
+                                   for rel in ("x.yml", "sub/x.yaml")),
+        out(cp)[-1500:],
+    )
+
     # (2) Both layouts at once is refused.
     with added_file(sharded / "STATUS.yaml", git(sharded, "show", f"{legacy_sha}:STATUS.yaml")):
         cp = run(["tools/ground_truth/verify.py", "--mode=sync"], sharded)

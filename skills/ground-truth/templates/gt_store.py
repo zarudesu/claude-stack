@@ -162,7 +162,12 @@ def load(root: Path) -> Contract:
     files = contract_files(root)
     if not files:
         raise ContractError(f"{STATUS} not found at {root / STATUS}")
-    return _assemble(files, lambda rel: (root / rel).read_text())
+    contract = _assemble(files, lambda rel: (root / rel).read_text())
+    # Dot files are editor and OS litter; anything else here was meant as a shard.
+    stray = [p.relative_to(root).as_posix() for p in (root / AREAS).rglob("[!.]*") if p.is_file()]
+    contract.problems += [("-", f"{rel}: not read; {AREAS}/ holds only <area>.yaml files")
+                          for rel in sorted(stray) if not _is_area_file(rel)]
+    return contract
 
 
 def _git(toplevel: Path, *args: str) -> subprocess.CompletedProcess:
