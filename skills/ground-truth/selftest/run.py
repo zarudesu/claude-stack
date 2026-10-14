@@ -3629,16 +3629,19 @@ def i11_shard_scenario() -> bool:
     new, cp_new = stage("new")
     legacy, cp_legacy = stage("legacy", "--legacy-layout")
     probed, cp_probe = stage("probe", probe='print(open("STATUS.yaml").read())\n')
+    dry, cp_dry = stage("dry", "--dry-run")
     return record(
         "I.11: a new install ends sharded; --legacy-layout keeps STATUS.yaml; a probe that reads "
-        "STATUS.yaml -> rc 3, STATUS.yaml kept, stage names --legacy-layout",
+        "STATUS.yaml -> rc 3, STATUS.yaml kept, stage names --legacy-layout; --dry-run writes nothing",
         cp_new.returncode == 0 and (new / ".ground-truth" / "contract.yaml").is_file()
         and not (new / "STATUS.yaml").exists()
         and cp_legacy.returncode == 0 and (legacy / "STATUS.yaml").is_file()
         and not (legacy / ".ground-truth" / "contract.yaml").exists()
         and cp_probe.returncode == 3 and (probed / "STATUS.yaml").is_file()
-        and "FAIL shard: gt migrate --write exited 3" in cp_probe.stderr and "--legacy-layout" in cp_probe.stderr,
-        f"new={out(cp_new)[-400:]} legacy={out(cp_legacy)} probe={out(cp_probe)[-400:]}",
+        and "FAIL shard: gt migrate --write exited 3" in cp_probe.stderr and "--legacy-layout" in cp_probe.stderr
+        and cp_dry.returncode == 0 and (dry / "STATUS.yaml").is_file()
+        and not (dry / ".ground-truth" / "contract.yaml").exists(),
+        f"new={out(cp_new)[-400:]} legacy={out(cp_legacy)} probe={out(cp_probe)[-400:]} dry={out(cp_dry)[-400:]}",
     )
 
 

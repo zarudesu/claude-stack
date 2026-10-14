@@ -4,7 +4,8 @@
 Runs the installed tools/ground_truth/gt.py migrate --write --skill <run.skill>
 in run.repo after I.10; the contract must be committed first, and the
 change it stages is committed as one change. --legacy-layout skips the
-step and keeps STATUS.yaml. Any non-zero exit of gt migrate (3: a repo
+step and keeps STATUS.yaml; --dry-run runs gt migrate without --write, which
+prints the plan and changes nothing. Any non-zero exit of gt migrate (3: a repo
 probe still reads STATUS.yaml, uncommitted contract, tools older than the
 skill; 1: not equivalent, rolled back) fails the stage with that exit code.
 """
@@ -23,15 +24,17 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True, help="path to run.json")
     parser.add_argument("--legacy-layout", action="store_true", help="keep STATUS.yaml, do not migrate")
+    parser.add_argument("--dry-run", action="store_true", help="print the migration plan, write nothing")
     args = parser.parse_args(argv)
     if args.legacy_layout:
         print("SKIP shard: --legacy-layout keeps STATUS.yaml")
         return 0
     run = load_run(args.run)
-    rc = subprocess.run([str(run.python), "tools/ground_truth/gt.py", "migrate", "--write", "--skill", str(run.skill)],
+    command = ["migrate"] if args.dry_run else ["migrate", "--write"]
+    rc = subprocess.run([str(run.python), "tools/ground_truth/gt.py", *command, "--skill", str(run.skill)],
                         cwd=run.repo).returncode
     if rc:
-        print(f"FAIL shard: gt migrate --write exited {rc}; fix what it printed above and run i11_shard again, "
+        print(f"FAIL shard: gt {' '.join(command)} exited {rc}; fix what it printed above and run i11_shard again, "
               "or pass --legacy-layout to keep STATUS.yaml", file=sys.stderr)
     return rc
 
