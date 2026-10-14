@@ -3,8 +3,9 @@
 
 The contract (STATUS.yaml, or .ground-truth/contract.yaml with areas/*.yaml)
 indexes executable claims in its declared scope; it is not a map of
-the whole project. Find the claims for the code you change with a grep
-(`rg -n 'path/to/file' STATUS.yaml`), then
+the whole project. Find the claims for the code you change with
+`{{PY}} tools/ground_truth/gt.py context --path <file>` (or
+`rg -n 'path/to/file' .ground-truth/ STATUS.yaml`), then
 `{{PY}} tools/ground_truth/blast_radius.py <path-or-claim-id>` for importers and
 declared relationships. Pick the claim whose concern matches the task: one file
 can carry several claims with different statuses. Read the implementation you
