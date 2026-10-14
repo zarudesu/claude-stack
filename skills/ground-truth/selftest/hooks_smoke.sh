@@ -1219,6 +1219,29 @@ else
   fail "SH8: both layouts, rm of a contract path with \$( \` \${ or a newline stays blocked (rcs=$rcs rc=$rc)"
 fi
 
+# Case SH9: remap over shards -> a shard that does not parse leaves every
+# shard unwritten; --report sums all shards; both layouts -> exit 3
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_remap_repo
+shard_repo
+shift_pricing_lines
+remap() { (cd "$REPO" && python3 tools/ground_truth/remap_line_refs.py "$@" STATUS.yaml); }  # gt-allow: real install path, not prose
+sed 's/^area: app$/area: zz/' "$REPO/.ground-truth/areas/app.yaml" > "$REPO/.ground-truth/areas/zz.yaml"
+(cd "$REPO" && git add -A .ground-truth && git -c user.email=t@example.com -c user.name=t commit -q -m zz)
+remap --base HEAD --report "$WORKDIR/remap.json" >/dev/null 2>&1; rc_report=$?
+shifted=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["totals"]["shifted"])' "$WORKDIR/remap.json")
+printf 'claims: [\n' > "$REPO/.ground-truth/areas/zz.yaml"
+remap --base HEAD --apply >/dev/null 2>&1; rc_apply=$?
+git -C "$REPO" show HEAD:STATUS.yaml > "$REPO/STATUS.yaml"
+out=$(remap --check --base HEAD 2>&1); rc_mixed=$?
+if [ $rc_report -eq 0 ] && [ "$shifted" = 2 ] && [ $rc_apply -eq 1 ] \
+   && grep -q "app/pricing.py:3 for" "$REPO/.ground-truth/areas/app.yaml" \
+   && [ $rc_mixed -eq 3 ] && printf '%s' "$out" | grep -q "both STATUS.yaml and .ground-truth/contract.yaml exist"; then
+  pass "SH9: remap over shards writes none when one does not parse, reports all, exits 3 on both layouts"
+else
+  fail "SH9: remap over shards writes none when one does not parse, reports all, exits 3 on both layouts (report=$rc_report shifted=$shifted apply=$rc_apply mixed=$rc_mixed out=$out)"
+fi
+
 # ---------------------------------------------------------------------
 # Broken environment: an interpreter without PyYAML (-S drops site-packages).
 # Blocking hooks fail closed and name the doctor; advisory ones only warn.

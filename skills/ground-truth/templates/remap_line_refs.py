@@ -40,9 +40,10 @@ treated as entirely working-tree coordinates.
 
 A literal STATUS.yaml argument on the sharded layout (.ground-truth/
 contract.yaml next to areas/*.yaml and debt.yaml) runs over each of those
-files in turn: the exit code is the highest one, --repair prints the
-total. A shard with no counterpart at <base> (the migration commit) is
-working-tree coordinates by the rule above.
+files and checks them all before writing any; the counts line, --report
+and --repair add them up. A shard with no counterpart at <base> (the
+migration commit) is working-tree coordinates by the rule above. Both
+layouts at once exit 3.
 
 Usage: remap_line_refs.py [--base HEAD] [--apply] [--dry-run] [--check]
                            [--repair] [--pre PATH] [--report PATH] STATUS_FILE
@@ -78,6 +79,7 @@ second run changes nothing.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import functools
 import json
 import os
@@ -574,10 +576,17 @@ def main(argv: list[str]) -> int:
     elif not args.check:
         print("note: no --pre given, prose-form citations are reported but not rewritten", file=sys.stderr)
 
-    files = [args.status_file]
-    if args.status_file == gt_store.STATUS and gt_store.detect_layout(Path.cwd()) == gt_store.SHARDED:
-        files = gt_store.contract_files(Path.cwd())
+    try:
+        files = [args.status_file]
+        if args.status_file == gt_store.STATUS and gt_store.detect_layout(Path.cwd()) == gt_store.SHARDED:
+            files = gt_store.contract_files(Path.cwd())
+    except gt_store.MixedLayoutError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    # Every file is read and checked before any is written: one bad shard leaves all of them as they were.
     stale = repaired = 0
+    report = {"totals": Counter(), "rewritten": [], "deleted": [], "unparsed": [], "assoc_risk": []}
+    writes = []
     for status_file in files:
         try:
             with open(status_file, newline="", encoding="utf-8") as f:
@@ -599,28 +608,34 @@ def main(argv: list[str]) -> int:
             stale += len(rewritten)
             continue
 
-        if not args.repair:
-            write_report(args.report, totals, rewritten, deleted, unparsed, assoc_risk)
+        report["totals"].update(totals)
+        for key, found in (("rewritten", rewritten), ("deleted", deleted), ("unparsed", unparsed), ("assoc_risk", assoc_risk)):
+            report[key] += found
 
         if (args.apply and not args.dry_run) or (args.repair and rewritten):
             new_text = "".join(out_lines)
             try:
                 yaml.safe_load(new_text)
             except yaml.YAMLError as exc:
-                print(f"error: refusing to write, result does not parse as YAML: {exc}", file=sys.stderr)
+                print(f"error: refusing to write, {status_file} would not parse as YAML: {exc}", file=sys.stderr)
                 return 1
-            dirname = os.path.dirname(os.path.abspath(status_file)) or "."
-            tmp_path = os.path.join(dirname, f".{os.path.basename(status_file)}.tmp{os.getpid()}")
-            try:
-                with open(tmp_path, "w", newline="", encoding="utf-8") as f:
-                    f.write(new_text)
-                os.replace(tmp_path, status_file)
-            except OSError as exc:
-                print(f"error: failed to write {status_file}: {exc}", file=sys.stderr)
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                return 1
+            writes.append((status_file, new_text))
         repaired += len(rewritten)
+
+    if not args.check and not args.repair:
+        write_report(args.report, **report)
+    for status_file, new_text in writes:
+        dirname = os.path.dirname(os.path.abspath(status_file)) or "."
+        tmp_path = os.path.join(dirname, f".{os.path.basename(status_file)}.tmp{os.getpid()}")
+        try:
+            with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+                f.write(new_text)
+            os.replace(tmp_path, status_file)
+        except OSError as exc:
+            print(f"error: failed to write {status_file}: {exc}", file=sys.stderr)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return 1
 
     if args.check:
         if stale:
