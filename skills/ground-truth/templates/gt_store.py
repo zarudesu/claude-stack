@@ -17,7 +17,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
+# yaml is imported where a file is parsed: the edit guard asks only for
+# file names and mtimes on every edit and must not pay for the parser.
 
 LEGACY, SHARDED, NONE = "legacy", "sharded", "none"
 STATUS = "STATUS.yaml"
@@ -90,6 +91,8 @@ def is_contract_file(rel: str) -> bool:
 
 
 def _parse(rel: str, text: str, keys: set[str] | None) -> tuple[dict, dict]:
+    import yaml
+
     loader = yaml.SafeLoader(text)
     try:
         node = loader.get_single_node()
@@ -187,6 +190,8 @@ def load_at(toplevel: Path, root: Path, rev: str) -> Contract | None:
 def area_index(root: Path) -> list[tuple[str, list[str]]]:
     """(area id, sources): model.yaml areas, then shards that carry sources
     for an id model.yaml does not have."""
+    import yaml
+
     model_path = root / MODEL
     model = yaml.safe_load(model_path.read_text()) if model_path.is_file() else None
     areas = model.get("areas") or [] if isinstance(model, dict) else []
@@ -203,6 +208,8 @@ def area_index(root: Path) -> list[tuple[str, list[str]]]:
 
 def enforcement(root: Path) -> str:
     """blocking when the contract meta or model.yaml says so, else advisory."""
+    import yaml
+
     files = contract_files(root)
     sources = [(files[0], lambda d: (d.get("meta") or {}).get("enforcement"))] if files else []
     sources.append((MODEL, lambda d: d.get("enforcement")))

@@ -28,13 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import contract_lib  # noqa: E402
-
-
-def _find_root(start: Path) -> Path:
-    for candidate in [start, *start.parents]:
-        if (candidate / "STATUS.yaml").is_file():
-            return candidate
-    return start
+import gt_store  # noqa: E402
 
 
 def _is_dirty(root: Path, rel_path: str) -> bool:
@@ -138,7 +132,8 @@ def main(argv: list[str]) -> int:
                         help="treat a canary whose check could not run here as a failure")
     args = parser.parse_args(argv)
 
-    root = args.root or _find_root(Path(__file__).resolve().parent)
+    here = Path(__file__).resolve().parent
+    root = args.root or gt_store.find_root(here) or here
     try:
         data = contract_lib.load_contract(root)
     except contract_lib.ContractError as exc:

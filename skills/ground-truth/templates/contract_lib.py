@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+import yaml  # noqa: F401 -- a missing PyYAML fails here, at import, as a broken environment
 
 import gt_store
 from gt_store import ContractError
@@ -2196,16 +2196,6 @@ def _debt_target_pathspecs(
         except ValueError:
             continue
     return specs
-
-
-def _baseline_status_claims(text: str) -> dict[str, dict] | None:
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return _status_claims_of(data)
 
 
 def _status_claims_of(data: dict) -> dict[str, dict] | None:

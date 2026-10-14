@@ -2921,11 +2921,15 @@ def cited_line_scenarios() -> bool:
     return ok
 
 
-def pending_queue_ci_scenario() -> bool:
+def pending_queue_ci_scenario(repo: Path = FIXTURE, tag: str = "") -> bool:
     """verify --mode=full: a queued finding warns, an unqueued or escalated one fails, the queue has a limit."""
     ok = True
-    queue = FIXTURE / ".ground-truth" / "pending.yaml"
+    queue = repo / ".ground-truth" / "pending.yaml"
+    made = not queue.parent.exists()
     queue.parent.mkdir(exist_ok=True)
+
+    def verify(mode: str) -> subprocess.CompletedProcess:
+        return run(["tools/ground_truth/verify.py", f"--mode={mode}"], cwd=repo)
 
     def entry(key: str, first: str, cls: str = "uncovered", batches: int = 0) -> dict:
         return {"key": key, "area": "global", "class": cls, "first_seen": {"date": first, "rev": "-"},
@@ -2935,44 +2939,45 @@ def pending_queue_ci_scenario() -> bool:
         return json.dumps({"pending": list(entries)})
 
     fresh = "uncovered:services/fresh_mod.py"
-    with added_file(FIXTURE / "tools" / "ground_truth" / "gt_pending.py", (TEMPLATES / "gt_pending.py").read_text()):
+    with added_file(repo / "tools" / "ground_truth" / "gt_pending.py", (TEMPLATES / "gt_pending.py").read_text()):
         # Only the STATUS-class entries this run still reports count: the 31 files exist.
         with contextlib.ExitStack() as stack:
             for i in range(31):
-                stack.enter_context(added_file(FIXTURE / "services" / f"q{i}_mod.py", "Y = 2\n"))
+                stack.enter_context(added_file(repo / "services" / f"q{i}_mod.py", "Y = 2\n"))
             stack.enter_context(added_file(queue, pending(*(entry(f"uncovered:services/q{i}_mod.py", TODAY)
                                                             for i in range(31)))))
             cp = verify("full")
-            ok &= record("pending: verify --mode=full exits 1 over the total queue limit",
+            ok &= record(f"pending{tag}: verify --mode=full exits 1 over the total queue limit",
                          cp.returncode == 1 and "pending queue has 31/30 entries" in out(cp), out(cp))
-        with added_file(FIXTURE / "services" / "fresh_mod.py", "Y = 2\n"):
+        with added_file(repo / "services" / "fresh_mod.py", "Y = 2\n"):
             with added_file(queue, pending(entry(fresh, "2000-01-01"))):
                 cp = verify("full")
-                ok &= record("pending: verify --mode=full exits 1 on an escalated entry",
+                ok &= record(f"pending{tag}: verify --mode=full exits 1 on an escalated entry",
                              cp.returncode == 1 and f"pending {fresh} escalated: first seen" in out(cp), out(cp))
             with added_file(queue, pending(entry(fresh, TODAY, batches=2))):
                 cp = verify("full")
-                ok &= record("pending: verify --mode=full exits 1 on an entry that survived max_batches reviews",
+                ok &= record(f"pending{tag}: verify --mode=full exits 1 on an entry that survived max_batches reviews",
                              cp.returncode == 1 and f"pending {fresh} escalated: survived 2 batch reviews" in out(cp),
                              out(cp))
             with added_file(queue, pending(entry(fresh, TODAY))):
                 cp = verify("full")
-                ok &= record("pending: verify --mode=full reports a queued, not escalated finding as WARN, exit 0",
+                ok &= record(f"pending{tag}: verify --mode=full reports a queued, not escalated finding as WARN, exit 0",
                              cp.returncode == 0 and "[WARN]" in out(cp) and "fresh_mod.py" in out(cp), out(cp))
             with added_file(queue, pending()):
                 cp = verify("full")
-                ok &= record("pending: verify --mode=full exits 1 on the same finding outside the queue",
+                ok &= record(f"pending{tag}: verify --mode=full exits 1 on the same finding outside the queue",
                              cp.returncode == 1 and "fresh_mod.py" in out(cp), out(cp))
         with added_file(queue, pending(entry("uncovered:services/gone_mod.py", "2000-01-01"))):
             cp = verify("full")
-            ok &= record("pending: verify --mode=full ignores an escalated entry whose finding is gone",
+            ok &= record(f"pending{tag}: verify --mode=full ignores an escalated entry whose finding is gone",
                          cp.returncode == 0, out(cp))
         # Memory entries are gt_context.py check's, not verify's.
         with added_file(queue, pending(entry("stale-area:old", "2000-01-01", "stale-area"))):
             cp = verify("full")
-            ok &= record("pending: verify --mode=full leaves an escalated memory entry to gt_context check",
+            ok &= record(f"pending{tag}: verify --mode=full leaves an escalated memory entry to gt_context check",
                          cp.returncode == 0, out(cp))
-    queue.parent.rmdir()
+    if made:
+        queue.parent.rmdir()
     return ok
 
 
@@ -3199,12 +3204,75 @@ def sharded_layout_scenarios() -> bool:
     return ok
 
 
+def sharded_guard_scenarios() -> bool:
+    """Session guard, edit guard, the CI queue and pending areas on the sharded layout."""
+    sys.path.insert(0, str(TEMPLATES))
+    import gt_pending
+
+    ok = True
+    repo = SCRATCH_BASE / "guard-sharded"
+    shutil.copytree(FIXTURE, repo, symlinks=True)
+    make_sharded(repo)
+    meta = repo / ".ground-truth" / "contract.yaml"
+    services = repo / ".ground-truth" / "areas" / "services.yaml"
+
+    def commit(message: str) -> None:
+        for args in (["add", "-A"], ["commit", "-q", "-m", message]):
+            subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    def session_guard() -> subprocess.CompletedProcess:
+        return run([str(TEMPLATES / "gt_session_guard.py"), "--root", str(repo), "--mode", "hook"], repo)
+
+    def edit_guard(rel: str) -> subprocess.CompletedProcess:
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(repo / rel)}, "cwd": str(repo),
+                   "session_id": "s1"}
+        return subprocess.run([sys.executable, str(TEMPLATES / "gt_edit_guard.py")], input=json.dumps(payload),
+                              capture_output=True, text=True, timeout=60)
+
+    commit("shard the contract")
+    ok &= pending_queue_ci_scenario(repo, " [sharded]")
+
+    with added_file(services.with_name("billing.yaml"), "area: billing\nsources: [services/billing]\nclaims: []\n"):
+        areas = gt_pending.model_areas(repo)
+        got = [gt_pending.area_of(p, areas) for p in ("services/billing/refund.py", "services/alpha/core.py", "x.py")]
+    ok &= record("sharded: pending area_of follows a shard's sources:, top directory outside every area",
+                 got == ["billing", "services", "global"], str(got))
+
+    cp = session_guard()
+    ok &= record("sharded: session guard on a clean tree -> exit 0", cp.returncode == 0, out(cp))
+    with patched(repo / "tests" / "test_alpha.py", '== "hello"', '== "wrong"'):
+        cp = session_guard()
+        ok &= record("sharded: session guard, touched claim red -> FAIL naming the contract",
+                     cp.returncode == 1 and "claim alpha_greeting: check FAILED" in out(cp)
+                     and "never edit contract (.ground-truth/) alone" in out(cp), out(cp))
+    with patched(services, "  status: stub\n", "  status: implemented\n"):
+        cp = session_guard()
+        ok &= record("sharded: session guard, status raised in a shard without mutation -> FAIL",
+                     cp.returncode == 1 and "new/raised implemented claim beta_worker_stub needs mutation" in out(cp),
+                     out(cp))
+
+    meta.write_text(meta.read_text().replace("enforcement: advisory", "enforcement: blocking"))
+    commit("blocking enforcement")
+    cp = edit_guard("services/gamma_mod.py")
+    ok &= record("sharded: strict edit guard blocks an uncovered file and names the contract",
+                 cp.returncode == 2 and "no claim covers it -- add a claim to contract (.ground-truth/) first"
+                 in cp.stderr, cp.stderr)
+    services.write_text(services.read_text() + "- id: gamma_mod\n  kind: status\n  status: stub\n"
+                        "  path: services/gamma_mod.py\n")
+    commit("claim gamma")
+    cp = edit_guard("services/gamma_mod.py")
+    ok &= record("sharded: edit guard cache follows a shard edit (the new claim is seen)",
+                 cp.returncode == 2 and "covered by claim(s) gamma_mod" in cp.stderr, cp.stderr)
+    return ok
+
+
 def main() -> int:
     build_fixture()
     ok = True
     ok &= happy_path()
     ok &= sharded_layout_scenarios()
     ok &= pending_queue_ci_scenario()
+    ok &= sharded_guard_scenarios()
     ok &= fault_scenarios()
     ok &= banned_words_exclude_scenarios()
     ok &= step4_scenarios()

@@ -21,12 +21,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:
-    yaml = None
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gt_store  # noqa: E402
+
 try:
     import gt_hook_state
 except ImportError:
@@ -38,22 +35,15 @@ JS_SUFFIXES = (".ts", ".tsx", ".js", ".jsx")
 
 
 def find_root(start: Path) -> Path:
-    """Walk up from `start` looking for a directory containing STATUS.yaml.
+    """Walk up from `start` looking for the contract (either layout).
     Falls back to the current working directory if none is found."""
-    cur = start.resolve()
-    for candidate in [cur, *cur.parents]:
-        if (candidate / "STATUS.yaml").is_file():
-            return candidate
-    return Path.cwd()
+    return gt_store.find_root(start.resolve()) or Path.cwd()
 
 
 def load_status(root: Path) -> dict:
-    status_file = root / "STATUS.yaml"
-    if not status_file.is_file() or yaml is None:
-        return {"claims": [], "edges": []}
     try:
-        data = yaml.safe_load(status_file.read_text()) or {}
-    except Exception:
+        data = gt_store.load(root).data
+    except Exception:  # no contract, no yaml, or a contract that does not parse
         data = {}
     # get(...) or [] normalizes an explicit `claims: null`/`edges: null` the
     # same as an absent key -- setdefault leaves an explicit null in place
@@ -380,10 +370,10 @@ def find_claims_covering_path(data: dict, path: Path, root: Path) -> list[dict]:
     return matches
 
 
-def print_claim_links(data: dict, claim: dict) -> None:
+def print_claim_links(data: dict, claim: dict, name: str) -> None:
     cid = claim["id"]
     status = claim.get("status") or claim.get("kind") or "?"
-    print(f"declared claim relationships (STATUS.yaml claim: {cid}, status: {status}):")
+    print(f"declared claim relationships ({name} claim: {cid}, status: {status}):")
     depends_on = claim.get("depends_on") or []
     if depends_on:
         print("  depends_on:")
@@ -415,6 +405,7 @@ def main() -> int:
 
     root = Path(args.root).resolve() if args.root else find_root(Path(__file__).parent)
     data = load_status(root)
+    name = gt_store.contract_name(root)
 
     claim = find_claim_by_id(data, args.target)
     target_path: Path | None = None
@@ -432,7 +423,7 @@ def main() -> int:
             target_path = candidate
         else:
             print(f"error: {args.target!r} is neither an existing path under {root} "
-                  f"nor a known STATUS.yaml claim id", file=sys.stderr)
+                  f"nor a known {name} claim id", file=sys.stderr)
             return 1
 
     if target_path is not None:
@@ -457,12 +448,12 @@ def main() -> int:
         rel = target_path.relative_to(root) if target_path else Path(args.target)
         covering = find_claims_covering_path(data, rel, root)
         if not covering:
-            print("declared claim relationships (STATUS.yaml): no claim covers this path")
+            print(f"declared claim relationships ({name}): no claim covers this path")
         else:
             for c in covering:
-                print_claim_links(data, c)
+                print_claim_links(data, c, name)
     else:
-        print_claim_links(data, claim)
+        print_claim_links(data, claim, name)
 
     text_ref_paths = claim_targets if claim_targets else ([target_path] if target_path else [])
     print_text_references(text_ref_paths, root)

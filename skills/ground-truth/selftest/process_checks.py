@@ -21,6 +21,7 @@ SKILL = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SKILL / "templates"))
 sys.path.insert(0, str(SKILL / "pipeline"))
 import contract_lib
+import gt_store
 import gt_session_guard as guard
 from stages import audit_scope, audit_close
 from gt_lib.paths import Run
@@ -78,15 +79,14 @@ class ProcessChecks(unittest.TestCase):
         self.assertEqual(guard.main(["--mode", "ci", "--root", str(self.root / "missing")]), 1)
 
     def test_ci_refuses_unreadable_baseline_claims(self):
-        with mock.patch.object(contract_lib, "_baseline_status_claims", return_value=None):
+        with mock.patch.object(contract_lib, "_status_claims_of", return_value=None):
             self.assertEqual(guard.main(["--mode", "ci", "--root", str(self.root), "--base", "HEAD"]), 1)
 
     def test_initial_contract_is_not_silently_exempt_from_proof(self):
-        def git_result(root, args):
-            if args[0] == "show":
-                return subprocess.CompletedProcess(args, 128, "", "path missing")
+        def git_result(toplevel, *args):
+            # ls-tree at the base lists no contract file: the first contract.
             return subprocess.CompletedProcess(args, 0, "", "")
-        with mock.patch.object(contract_lib, "_git_run", side_effect=git_result):
+        with mock.patch.object(gt_store, "_git", side_effect=git_result):
             baseline = guard._baseline_claims(self.root, self.root, "HEAD")
         self.assertEqual(baseline, {})
         unproven = {**self.claim}

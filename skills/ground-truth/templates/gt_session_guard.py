@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     import contract_lib  # noqa: E402
+    import gt_store  # noqa: E402
     from gt_edit_guard import claim_ids_for, is_test_file  # noqa: E402
 except Exception as exc:  # a broken environment is never a green check
     print(f"ground-truth: environment broken: {exc}; run: python3 tools/ground_truth/gt_doctor.py",
@@ -59,13 +60,6 @@ _DEF_PATTERNS = {
     ".ts": _JS_DEFS,
     ".tsx": _JS_DEFS,
 }
-
-
-def _find_root(start: Path) -> Path:
-    for candidate in [start, *start.parents]:
-        if (candidate / "STATUS.yaml").is_file():
-            return candidate
-    return start
 
 
 def _to_root(path: str, toplevel: Path, root: Path) -> str | None:
@@ -146,18 +140,18 @@ def _added_lines(toplevel: Path, root: Path, mode: str, base: str) -> dict[str, 
 
 
 def _baseline_claims(toplevel: Path, root: Path, base: str) -> dict[str, dict] | None:
-    rel_status = contract_lib._rel_status_path(toplevel, root)
-    if rel_status is None:
-        raise ValueError("cannot locate baseline STATUS.yaml within the git repository")
-    shown = contract_lib._git_run(toplevel, ["show", f"{base}:{rel_status}"])
-    if shown.returncode != 0:
-        listed = contract_lib._git_run(toplevel, ["ls-tree", "--name-only", base, "--", rel_status])
-        if listed.returncode == 0 and not listed.stdout.strip():
+    name = gt_store.contract_name(root)
+    try:
+        contract = gt_store.load_at(toplevel, root, base)
+        if contract is None:
             return {}  # First contract: every claim really is new.
-        raise ValueError("cannot read baseline STATUS.yaml")
-    baseline = contract_lib._baseline_status_claims(shown.stdout)
+        baseline = contract_lib._status_claims_of(contract.data)
+    except gt_store.ContractError:
+        baseline = None
+    except ValueError:
+        raise ValueError(f"cannot locate baseline {name} within the git repository") from None
     if baseline is None:
-        raise ValueError("baseline STATUS.yaml has unusable claims")
+        raise ValueError(f"baseline {name} has unusable claims")
     return baseline
 
 
@@ -219,7 +213,7 @@ def _fail_recipe(root: Path, claim: dict, message: str) -> str:
     lines += [f"  {line}" for line in message.splitlines()[-15:]]
     lines.append(
         f"  fix: make the check green (edit the code or the test it names), "
-        f"or lower status: and add debt with ref: {cid}; never edit STATUS.yaml alone"
+        f"or lower status: and add debt with ref: {cid}; never edit {gt_store.contract_name(root)} alone"
     )
     return "\n".join(lines)
 
@@ -426,7 +420,7 @@ def rule_new_definitions(root, claims, changed, added, roots, excludes) -> list[
     for rel in sorted(added):
         if rel not in changed:
             continue
-        if rel == "STATUS.yaml" or rel.startswith("tools/ground_truth/"):
+        if gt_store.is_contract_file(rel) or rel.startswith("tools/ground_truth/"):
             continue
         if _is_test(rel) or not contract_lib._under_coverage_roots(rel, roots, excludes):
             continue
@@ -475,7 +469,8 @@ def _log_traceback(root: Path) -> None:
 
 
 def guard(args) -> int:
-    root = args.root or _find_root(Path(__file__).resolve().parent)
+    here = Path(__file__).resolve().parent
+    root = args.root or gt_store.find_root(here) or here
     data = contract_lib.load_contract(root)
     toplevel = contract_lib._git_toplevel(root)
     issues: list[tuple[str, str, str]] = []

@@ -28,9 +28,10 @@ treats app/billing.py as written to -- a false positive, and a safe one,
 since it only ever gates a command that never needed it.
 
 Everything on the path from stdin to a verdict has to stay cheap: the hook
-fires before every single edit. The parsed shape of STATUS.yaml is cached
-next to the repository's git metadata, keyed by the file's mtime and size,
-so the yaml parser is imported only when the contract itself changed.
+fires before every single edit. The parsed shape of the contract is cached
+next to the repository's git metadata, keyed by the newest mtime and the
+total size of its files, so the yaml parser is imported only when the
+contract itself changed.
 """
 from __future__ import annotations
 
@@ -43,6 +44,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import gt_store  # noqa: E402
 
 CACHE_NAME = "ground-truth-paths-v2.json"
 PROBES_PREFIX = "tools/ground_truth/probes/"
@@ -153,6 +156,12 @@ def _locate(dirpath) -> tuple[Path | None, Path | None]:
     return Path(lines[0].strip()), git_dir
 
 
+def _stamp(root: Path) -> tuple[int, int]:
+    """(newest mtime, total size) over the contract files: the cache key."""
+    stats = [(root / rel).stat() for rel in gt_store.contract_files(root)]
+    return max(st.st_mtime_ns for st in stats), sum(st.st_size for st in stats)
+
+
 def _read_cache(cache_path: Path, st) -> dict | None:
     try:
         cfg = json.loads(cache_path.read_text())
@@ -160,19 +169,15 @@ def _read_cache(cache_path: Path, st) -> dict | None:
         return None
     if not isinstance(cfg, dict):
         return None
-    if cfg.get("mtime_ns") != st.st_mtime_ns or cfg.get("size") != st.st_size:
+    if [cfg.get("mtime_ns"), cfg.get("size")] != list(st):
         return None
     return cfg
 
 
-def _build_cache(status_path: Path, st) -> dict:
-    # Imported here and not at module level: on a cache hit the parser is
-    # never needed, and its import is the single largest cost in this file.
-    import yaml
-
-    data = yaml.safe_load(status_path.read_text()) or {}
-    if not isinstance(data, dict):
-        data = {}
+def _build_cache(root: Path, st) -> dict:
+    # gt_store imports the parser only here: on a cache hit it is never
+    # needed, and its import is the single largest cost in this file.
+    data = gt_store.load(root).data
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
     coverage = meta.get("coverage") if isinstance(meta.get("coverage"), dict) else {}
     paths: list[list[str]] = []
@@ -190,8 +195,8 @@ def _build_cache(status_path: Path, st) -> dict:
             if isinstance(entry, str) and entry:
                 paths.append([Path(os.path.normpath(entry)).as_posix(), cid])
     return {
-        "mtime_ns": st.st_mtime_ns,
-        "size": st.st_size,
+        "mtime_ns": st[0],
+        "size": st[1],
         "roots": [r for r in coverage.get("roots") or [] if isinstance(r, str)],
         "exclude": [e for e in coverage.get("exclude") or [] if isinstance(e, str)],
         "enforcement": meta.get("enforcement", "advisory"),
@@ -216,10 +221,11 @@ def _store_cache(cache_path: Path, cfg: dict) -> None:
 
 def _status_dirty(root: Path) -> bool:
     try:
-        cp = _git(root, ["status", "--porcelain", "--", "STATUS.yaml"])
+        files = gt_store.contract_files(root)
+        cp = _git(root, ["status", "--porcelain", "--", *files])
         if not cp.stdout.strip():
             return False
-        diff = _git(root, ["diff", "-U0", "HEAD", "--", "STATUS.yaml"]).stdout.splitlines()
+        diff = _git(root, ["diff", "-U0", "HEAD", "--", *files]).stdout.splitlines()
     except (OSError, subprocess.SubprocessError):
         return True
     # Line numbers the Stop hook's remap --repair shifted are not a claim being written.
@@ -338,7 +344,7 @@ def _leading_checks(root: Path, git_dir: Path, rel: str, sid: str, via: str) -> 
     # everything else there stays exempt. Tests are exempted later, in
     # _gate_covered_or_roots, after the claim lookup: a file a claim names
     # is always gated, whatever its name looks like.
-    if rel == "STATUS.yaml" or rel.startswith("docs/"):
+    if gt_store.is_contract_file(rel) or rel.startswith("docs/"):
         return 0
     if rel.startswith("tools/ground_truth/"):
         if rel.startswith(PROBES_PREFIX) and rel.endswith(".py"):
@@ -368,7 +374,7 @@ def _gate_covered_or_roots(root: Path, git_dir: Path, rel: str, sid: str, cfg: d
     suffix = f" ({via})" if via else ""
     message = (
         f"ground-truth: {rel}{suffix} is under coverage roots and no claim covers it "
-        "-- add a claim to STATUS.yaml first (rg -n path: recipe in "
+        f"-- add a claim to {gt_store.contract_name(root)} first (rg -n path: recipe in "
         ".claude/rules/ground-truth.md), then edit"  # gt-allow: real rule path, not prose
     )
     if cfg.get("enforcement") == "blocking":
@@ -394,18 +400,17 @@ def _run_bash(payload: dict, tool_input: dict, cwd: str) -> int:
     if root is None:
         return 0
 
-    status_path = root / "STATUS.yaml"
-    if not status_path.is_file() or not (root / "tools" / "ground_truth").is_dir():
+    if not gt_store.contract_files(root) or not (root / "tools" / "ground_truth").is_dir():
         return 0
 
     try:
-        st = status_path.stat()
+        st = _stamp(root)
     except OSError:
         return 0
     cache_path = git_dir / CACHE_NAME
     cfg = _read_cache(cache_path, st)
     if cfg is None:
-        cfg = _build_cache(status_path, st)
+        cfg = _build_cache(root, st)
         _store_cache(cache_path, cfg)
 
     sid = payload.get("session_id") or "unknown"
@@ -445,8 +450,7 @@ def run() -> int:
     if root is None:
         return 0
 
-    status_path = root / "STATUS.yaml"
-    if not status_path.is_file() or not (root / "tools" / "ground_truth").is_dir():
+    if not gt_store.contract_files(root) or not (root / "tools" / "ground_truth").is_dir():
         return 0
 
     try:
@@ -461,13 +465,13 @@ def run() -> int:
         return rc
 
     try:
-        st = status_path.stat()
+        st = _stamp(root)
     except OSError:
         return 0
     cache_path = git_dir / CACHE_NAME
     cfg = _read_cache(cache_path, st)
     if cfg is None:
-        cfg = _build_cache(status_path, st)
+        cfg = _build_cache(root, st)
         _store_cache(cache_path, cfg)
 
     return _gate_covered_or_roots(root, git_dir, rel, sid, cfg, "")
