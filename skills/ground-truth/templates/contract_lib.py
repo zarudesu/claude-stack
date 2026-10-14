@@ -2476,7 +2476,7 @@ def check_cited_lines(root: Path, data: dict, mode: str) -> list[Issue]:
                     severity,
                     claim.get("id", "-"),
                     f"{problem}; fix: run "
-                    "tools/ground_truth/remap_line_refs.py --repair or update the note",
+                    "tools/ground_truth/remap_line_refs.py --repair STATUS.yaml or update the note",
                 )
             )
     return issues

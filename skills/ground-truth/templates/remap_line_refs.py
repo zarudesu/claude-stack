@@ -117,17 +117,17 @@ PROSE_RE = re.compile(
     r"\b(lines?)\s+(\d+(?:-\d+)?(?:(?:,\s*(?:and\s+)?|\s+and\s+)\d+(?:-\d+)?)*)"
 )
 
-# The citation and quote shapes contract_lib.check_cited_lines reads, copied
-# here for the same reason as _ENTRY_RE below.
+# The citation and quote shapes contract_lib.check_cited_lines reads; keep
+# the two copies in step.
 CITE_RE = re.compile(
     r"(?P<path>(?:[\w.\-]+/)+[\w.\-]+|[\w\-]+\.[A-Za-z0-9]{1,5}):(?P<line>\d+)"
     r"(?:-(?P<line_end>\d+))?(?!\d)"
 )
 QUOTE_RE = re.compile(r"«([^»]+)»|\"([^\"]+)\"|`([^`]+)`")
 
-# A minimal id-block splitter, kept self-contained here (this file is
-# copied into a target repository on its own, with no library import
-# available) rather than shared with the skill's own yaml_edit module.
+# A minimal id-block splitter, kept here rather than shared with the skill's
+# yaml_edit module: that one lives in pipeline/ and is not installed into
+# the repository's tools/ground_truth/.
 _ENTRY_RE = re.compile(r"^( *)- id: (\S+)$\n((?:\1  .*\n)+)", re.M)
 
 
