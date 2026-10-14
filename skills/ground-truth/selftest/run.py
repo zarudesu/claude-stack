@@ -3497,6 +3497,61 @@ def migrate_scenarios() -> bool:
     return ok
 
 
+def gt_cli_scenario() -> bool:
+    """Every gt command runs once with rc 0; gt doctor answers on a python without PyYAML."""
+    sys.path.insert(0, str(TEMPLATES))
+    sys.path.insert(0, str(SKILL_ROOT / "pipeline" / "stages"))
+    import gt_context
+    import i9_install
+
+    repo = SCRATCH_BASE / "gt-cli"
+    shutil.copytree(FIXTURE, repo, symlinks=True)
+    for name in i9_install.TOOLS_FILES:
+        shutil.copy(TEMPLATES / name, repo / "tools" / "ground_truth" / name)
+    (repo / ".ground-truth").mkdir()
+    (repo / ".ground-truth" / "model.yaml").write_text(MIGRATE_MODEL.format(path="."))
+    (repo / "verdicts.yaml").write_text("[]\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "gt cli"], cwd=repo, check=True)
+    view = gt_context.inspect(repo)
+    gt_context.refresh(repo, list(view["nodes"]), view["revision"], "fixture review")
+
+    commands = [
+        ["context", "--path", "services/alpha/core.py"],
+        ["show", "alpha_greeting"],
+        ["sync"],
+        ["audit"],
+        ["batch", "--verdicts", "verdicts.yaml"],
+        ["pending", "summary"],
+        ["remap", "--check", "STATUS.yaml"],
+        ["refresh", "--area", "alpha", "--reviewed", "--expect", gt_context.inspect(repo)["revision"],
+         "--evidence", "fixture review"],
+        ["blast", "alpha_greeting"],
+        ["mutate", "--id", "alpha_greeting", "--allow-dirty"],
+        ["migrate"],
+    ]
+    failed = {}
+    for args in commands:
+        cp = run(["tools/ground_truth/gt.py", *args], repo)
+        if cp.returncode != 0:
+            failed[args[0]] = f"rc={cp.returncode} {out(cp)[-600:]}"
+    # doctor needs an installed repo; gt.py itself runs on a python without PyYAML (-S).
+    installed, args = _i9_repo("gt-cli", {".github/workflows/ci.yml": I9_GITHUB_WORKFLOW.format(name="ci")})
+    cp_write = run([*args, "--write"], SKILL_ROOT)
+    bare = SCRATCH_BASE / "gt-cli-bare-python"
+    bare.write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n')
+    bare.chmod(0o755)
+    cp_bare = run([str(bare), "-c", "import yaml"], installed)
+    cp_doctor = run([str(bare), "tools/ground_truth/gt.py", "doctor"], installed)
+    return record(
+        "gt cli: context, show, sync, audit, batch, pending, remap, refresh, blast, mutate and migrate "
+        "each exit 0; gt doctor exits 0 run by a python that cannot import yaml",
+        not failed and cp_write.returncode == 0 and cp_bare.returncode != 0 and cp_doctor.returncode == 0
+        and cp_doctor.stdout.startswith("ground-truth doctor: ok"),
+        f"failed={failed} write={out(cp_write)[-300:]} bare={out(cp_bare)[-200:]} doctor={out(cp_doctor)}",
+    )
+
+
 def main() -> int:
     build_fixture()
     ok = True
@@ -3505,6 +3560,7 @@ def main() -> int:
     ok &= pending_queue_ci_scenario()
     ok &= sharded_guard_scenarios()
     ok &= migrate_scenarios()
+    ok &= gt_cli_scenario()
     ok &= fault_scenarios()
     ok &= banned_words_exclude_scenarios()
     ok &= step4_scenarios()
