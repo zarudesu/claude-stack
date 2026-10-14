@@ -1016,6 +1016,26 @@ else
   fail "R2: remap --check on a clean repo -> exit 0, no fix: hint, no report file (rc=$rc out=$out)"
 fi
 
+# Case R6: a commit rewrites the first line of a cited range without moving
+# any line -> the numbers still point at the same lines: --check exit 0, silent;
+# a line inserted above the range is still caught -> exit 1.
+export ENFORCEMENT=advisory GT_VERIFY_EXIT=0
+setup_remap_repo
+commit_all() { (cd "$REPO" && git add -A && git -c user.email=t@example.com -c user.name=t commit -q -m "$1"); }
+(cd "$REPO" && sed 's/app\/pricing.py:3 /app\/pricing.py:3-4 /' STATUS.yaml > STATUS.new && mv STATUS.new STATUS.yaml)
+commit_all range
+write_pricing 150
+commit_all rewrite
+out=$(cd "$REPO" && python3 tools/ground_truth/remap_line_refs.py --check --base HEAD~1 STATUS.yaml 2>&1); rc=$?  # gt-allow: real install path, not prose
+shift_pricing_lines
+commit_all shift
+out2=$(cd "$REPO" && python3 tools/ground_truth/remap_line_refs.py --check --base HEAD~1 STATUS.yaml 2>&1); rc2=$?  # gt-allow: real install path, not prose
+if [ $rc -eq 0 ] && [ -z "$out" ] && [ $rc2 -eq 1 ] && printf '%s' "$out2" | grep -q "app/pricing.py:3-4 -> 5-6"; then
+  pass "R6: remap --check on a rewritten first line of a cited range, no shift -> exit 0; shift above -> exit 1"
+else
+  fail "R6: remap --check on a rewritten first line of a cited range, no shift -> exit 0; shift above -> exit 1 (rc=$rc out=$out rc2=$rc2 out2=$out2)"
+fi
+
 # Case R3: remap --check crashes while reading an undecodable STATUS.yaml
 # (a raw non-UTF-8 byte -- the file is opened with encoding="utf-8" and
 # only OSError is caught around that read, so a bad byte raises

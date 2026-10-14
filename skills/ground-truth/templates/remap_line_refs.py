@@ -601,11 +601,14 @@ def main(argv: list[str]) -> int:
         )
 
         if args.check:
-            for r in rewritten:
+            # a "replaced" citation whose numbers stay put is not stale; the
+            # report still lists it, recon reviews those claims
+            moved = [r for r in rewritten if r["old"] != r["new"]]
+            for r in moved:
                 old = r["old"][1:] if r["old"].startswith(":") else r["old"]
                 new = r["new"][1:] if r["new"].startswith(":") else r["new"]
                 print(f"{status_file}:{r['line']}: {r['path']}:{old} -> {new}")
-            stale += len(rewritten)
+            stale += len(moved)
             continue
 
         report["totals"].update(totals)
