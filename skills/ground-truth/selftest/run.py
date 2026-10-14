@@ -3043,6 +3043,7 @@ def sharded_layout_scenarios() -> bool:
     (legacy / "docs" / "refs.md").write_text(
         "Known: claim:alpha_greeting, STATUS.yaml#handlers_http.\n"
         "Unknown: claim:nope_claim, STATUS.yaml#nope_status.\n"
+        "Hyphen: claim:nope-claim.\n"
     )
     status = legacy / "STATUS.yaml"
     status.write_text(status.read_text().replace(
@@ -3074,6 +3075,7 @@ def sharded_layout_scenarios() -> bool:
     ok &= record(
         "layout: claim:<id> and STATUS.yaml#<id> cross-references checked on the sharded layout",
         sorted(msgs) == ["docs/refs.md: reference to unknown claim STATUS.yaml#nope_status",
+                         "docs/refs.md: reference to unknown claim claim:nope-claim",
                          "docs/refs.md: reference to unknown claim claim:nope_claim"],
         str(msgs),
     )

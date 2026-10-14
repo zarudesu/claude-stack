@@ -974,8 +974,9 @@ class BatchReviewChecks(unittest.TestCase):
         shards = self.repo / ".ground-truth"
         (shards / "areas").mkdir(parents=True)
         (shards / "contract.yaml").write_text("schema_version: 2\nmeta:\n  enforcement: blocking\nedges: []\n")
-        (shards / "areas/global.yaml").write_text("area: global\nclaims:\n- id: price_v2\n")
+        (shards / "areas/global.yaml").write_text("area: global\nclaims:\n- id: price_v2\n- id: price-v3\n")
         self.assertEqual(replace("now claim:price_v2")[0], 0)
+        self.assertEqual(replace("now claim:price-v3.")[0], 0)
         rc, err = replace("STATUS.yaml#gone")
         self.assertEqual(rc, 1)
         self.assertIn("existing claim", err)
