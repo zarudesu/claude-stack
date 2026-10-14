@@ -18,7 +18,7 @@ are refreshed.
 
 Exit 0: migrated, or already sharded. 1: not equivalent, rolled back.
 2: bad arguments. 3: contract error, mixed or missing layout, failed precheck,
-a repo probe that still names STATUS.yaml (--write only).
+a repo probe that still names STATUS.yaml (--write only), git add failed.
 """
 from __future__ import annotations
 
@@ -425,10 +425,13 @@ def write(root: Path, plan: dict) -> int:
         return 1
     print(f"wrote {len(created)} file(s), deleted {STATUS}")
     # The deletion has to reach the index before model receipts stop seeing STATUS.yaml.
-    staged = subprocess.run(["git", "add", "-A", "--", STATUS, gt_store.META, gt_store.DEBT, gt_store.AREAS],
-                            cwd=root, capture_output=True, text=True)
-    print("staged the contract change; commit it as one change" if staged.returncode == 0
-          else f"WARN git add failed: {staged.stderr.strip()}")
+    paths = [STATUS, *plan["files"]] + ([str(model[1])] if model and model[1].resolve().is_relative_to(root) else [])
+    staged = subprocess.run(["git", "add", "--", *paths], cwd=root, capture_output=True, text=True)
+    if staged.returncode:
+        print(f"gt migrate: git add failed: {staged.stderr.strip()}; stage {', '.join(paths)} by hand",
+              file=sys.stderr)
+        return 3
+    print("staged the contract change; commit it as one change")
     if model and model[4]:
         import gt_context
 

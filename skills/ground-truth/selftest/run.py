@@ -3557,6 +3557,24 @@ def migrate_scenarios() -> bool:
         and cp_args.returncode == 2 and cp_none.returncode == 2,
         f"old={out(cp_old)} skip={out(cp_skip)} dirty={out(cp_dirty)} args={out(cp_args)} none={out(cp_none)}",
     )
+
+    # (6) Staging: a contract without debt and an edited model.yaml are staged whole; a failed git add is an error.
+    nodebt = prepare(SCRATCH_BASE / "migrate-nodebt", lambda t: t[:t.index("\ndebt:\n") + 1])
+    cp = migrate(nodebt, "--write")
+    locked = prepare(SCRATCH_BASE / "migrate-locked")
+    (locked / ".git" / "index.lock").write_text("")
+    cp_locked = migrate(locked, "--write")
+    staged = git(nodebt, "status", "--porcelain", "--untracked-files=all").splitlines()
+    ok &= record(
+        "migrate: no debt.yaml -> the rest is staged, model.yaml staged, rc 0; git add failing -> rc 3",
+        cp.returncode == 0 and not (nodebt / ".ground-truth/debt.yaml").exists()
+        and all(line[1] == " " for line in staged)
+        and {"D  STATUS.yaml", "A  .ground-truth/contract.yaml"} <= set(staged)
+        and git(SCRATCH_BASE / "migrate-model", "diff", "--name-only") == ""
+        and cp_locked.returncode == 3 and "git add" in cp_locked.stderr,
+        f"nodebt={out(cp)} {git(nodebt, 'status', '--porcelain', '--untracked-files=all')} "
+        f"model={git(SCRATCH_BASE / 'migrate-model', 'status', '--porcelain')} locked={out(cp_locked)}",
+    )
     return ok
 
 
