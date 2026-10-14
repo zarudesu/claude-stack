@@ -3411,14 +3411,16 @@ def migrate_scenarios() -> bool:
         "    roots:\n      - services\n      - handlers\n", "    roots:\n      - .\n", 1).replace(
         '    path: "handlers"\n',
         "    path:\n      - handlers\n      - services/alpha/core.py\n      - services/alpha\n", 1).replace(
-        '    path: "main.py"\n', "    path: [svc, main.py]\n", 1))
+        '    path: "main.py"\n', "    path: [svc, main.py]\n", 1),
+        files={"tools/ground_truth/probes/own_probe.py": 'STATUS = "STATUS.yaml"\n'})
     rc_before = full(paths)
     cp = migrate(paths, "--write", "--max-claims", "1", "--min-claims", "1")
     areas = area_of(paths)
     ok &= record(
         "migrate: roots ['.'], multi-path claims, oversized services/ split -> majority area, "
-        "tie to the first path, Δ0, verify rc unchanged",
+        "tie to the first path, Δ0, verify rc unchanged, a repo probe naming STATUS.yaml listed",
         cp.returncode == 0 and equal in cp.stdout and full(paths) == rc_before
+        and "tools/ground_truth/probes/own_probe.py" in cp.stdout.split("edit by hand:")[-1]
         and areas["handlers_http"] == areas["alpha_greeting"] == "services-alpha"
         and areas["beta_worker_stub"] == "services-beta" and areas["main_script"] == "svc"
         and areas["external_dashboard"] == areas["ops_smoke"] == "global"

@@ -317,11 +317,12 @@ def fresh_areas(model_root: Path, areas: list[str], warns: list[str]) -> list[st
 
 def report(root: Path, plan: dict) -> None:
     groups, sources = plan["groups"], plan["sources"]
-    print(f"{'area':32} {'claims':>6}  sources")
+    width = max(map(len, groups), default=0) + 1
+    print(f"{'area':{width}} {'claims':>6}  sources")
     for aid in sorted(groups):
         mark = "  OVERSIZED" if len(groups[aid]) > OVERSIZED else ""
         where = ", ".join(sources[aid]) if sources.get(aid) else "-" if aid == GLOBAL else "(model.yaml)"
-        print(f"{aid:32} {len(groups[aid]):6}  {where}{mark}")
+        print(f"{aid:{width}} {len(groups[aid]):6}  {where}{mark}")
     states = collections.Counter(d.get("state", "?") for d in plan["data"].get("debt") or [] if isinstance(d, dict))
     print(f"claims in {GLOBAL}: {len(groups.get(GLOBAL, []))}; debt: "
           + (", ".join(f"{k} {v}" for k, v in sorted(states.items())) or "none")
@@ -338,7 +339,9 @@ def report(root: Path, plan: dict) -> None:
     for line in plan["warns"]:
         print(f"WARN {line}")
     listed = subprocess.run(["git", "grep", "-l", "-F", STATUS], cwd=root, capture_output=True, text=True)
-    by_hand = [p for p in listed.stdout.splitlines() if p != STATUS and not p.startswith("tools/ground_truth/")]
+    # Installed tools read either layout; a repo's own probes may not, and verify runs them.
+    by_hand = [p for p in listed.stdout.splitlines()
+               if p != STATUS and os.path.dirname(p) != "tools/ground_truth"]
     if by_hand:
         print(f"still name {STATUS}, edit by hand: {', '.join(by_hand)}")
 
