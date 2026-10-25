@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# ask — route a task to claude / local (Ollama behind claude) / codex before any model sees it.
+# Usage: ask [--to claude|local|codex | -c|-l|-x] [-p] [--dry] [prompt...] [-- target-args...]
+#   -p     headless: claude -p "$prompt" / codex exec "$prompt"
+#   --dry  print routing decision and command, don't run
+# Choice: flag > rules ($ASK_RULES, default ~/.config/router/rules; first match) > claude.
+# Local model: $ASK_LOCAL_MODEL (default qwen3.6-35b-a3b-128k). Routing line -> stderr.
+set -euo pipefail
+
+RULES="${ASK_RULES:-$HOME/.config/router/rules}"
+target="" reason="" print=0 dry=0 words=() pass=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --to) [ $# -ge 2 ] || { echo "ask: --to needs a target" >&2; exit 64; }; target="$2"; shift ;;
+    --to=*) target="${1#--to=}" ;;
+    -c) target=claude ;;
+    -l) target=local ;;
+    -x) target=codex ;;
+    -p) print=1 ;;
+    --dry) dry=1 ;;
+    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --) shift; pass=("$@"); break ;;
+    -?*) echo "ask: unknown option $1 (target args go after --)" >&2; exit 64 ;;
+    *) words+=("$1") ;;
+  esac
+  shift
+done
+prompt="${words[*]}"
+
+if [ -n "$target" ]; then
+  reason=flag
+elif [ -f "$RULES" ]; then
+  while IFS=$'\t' read -r t kind pat || [ -n "$t" ]; do
+    case "$t" in ''|'#'*) continue ;; esac
+    case "$kind" in
+      cwd) p="${pat/#\~/$HOME}"; p="${p%/}"
+           [[ "$PWD" == "$p" || "$PWD" == "$p"/* ]] || continue ;;
+      text) if [ -z "$prompt" ] || ! grep -qiE -- "$pat" <<<"$prompt"; then continue; fi ;;
+      *) echo "ask: bad rule kind '$kind' in $RULES" >&2; continue ;;
+    esac
+    target="$t" reason="rule: $pat"; break
+  done < "$RULES"
+fi
+target="${target:-claude}" reason="${reason:-default}"
+
+# Session vars of a parent Claude Code session must not leak into the child.
+cmd=(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_BRIDGE_SESSION_ID
+     -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_ENTRYPOINT)
+# Same project tag as the zsh claude()/codex() wrappers (time tracking).
+root=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || root="$PWD"
+cmd+=(OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES:+$OTEL_RESOURCE_ATTRIBUTES,}project=${root##*/}")
+case "$target" in
+  local)
+    M="${ASK_LOCAL_MODEL:-qwen3.6-35b-a3b-128k}"
+    cmd+=(ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=ollama ANTHROPIC_API_KEY=
+          ANTHROPIC_MODEL="$M" ANTHROPIC_DEFAULT_HAIKU_MODEL="$M" ANTHROPIC_DEFAULT_SONNET_MODEL="$M"
+          ANTHROPIC_DEFAULT_OPUS_MODEL="$M" CLAUDE_CODE_SUBAGENT_MODEL="$M"
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW=120000
+          claude --settings '{"enabledPlugins":{"claude-mem@thedotmack":false}}') ;;
+  claude) cmd+=(claude) ;;
+  codex) cmd+=(codex); [ "$print" = 1 ] && cmd+=(exec) ;;
+  *) echo "ask: unknown target '$target' ($reason)" >&2; exit 64 ;;
+esac
+if [ "$target" != codex ] && [ "$print" = 1 ]; then cmd+=(-p); fi
+[ -n "$prompt" ] && cmd+=("$prompt")
+cmd+=("${pass[@]}")
+
+echo "→ $target ($reason)" >&2
+if [ "$dry" = 1 ]; then
+  for a in "${cmd[@]}"; do
+    if [[ "$a" =~ ^[A-Za-z0-9_./:=@%+-]+$ ]]; then printf '%s ' "$a"; else printf "'%s' " "${a//\'/\'\\\'\'}"; fi
+  done
+  echo; exit 0
+fi
+
+if [ "$target" = local ] && ! curl -sf --max-time 3 localhost:11434/api/version >/dev/null; then
+  echo "ask: Ollama is not running on localhost:11434 — start it: open -a Ollama (or: ollama serve)" >&2
+  exit 1
+fi
+exec "${cmd[@]}"
