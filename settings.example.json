@@ -6,14 +6,14 @@
     "commit": "",
     "pr": ""
   },
-  "model": "opus",
+  "model": "claude-fable-5-2",
   "effortLevel": "high",
   "modelSettings": {
     "claude-opus-5-5": {
       "effortLevel": "high"
     },
-    "claude-fable-5-1": {
-      "effortLevel": "xhigh"
+    "claude-fable-5-2": {
+      "effortLevel": "high"
     }
   },
   "env": {

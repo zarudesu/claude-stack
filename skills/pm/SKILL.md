@@ -184,7 +184,8 @@ Rollback завязан на **матрицу потребителей**, не �
 
 | Роль | Модель |
 |------|--------|
-| PM (main) | session model, effort high (frontmatter) |
+| PM (main) | session model (Fable 5.2), effort high |
+| fable-deep (весь репо в одном окне; вопрос, который не решил opus high) | fable (Fable 5.2), effort high — один вызов на задачу, больше — после «да» владельца |
 | Research / Analyst / Dev / Test / git-workflow-manager | opus (Opus 5.5), effort medium |
 | Architect / code-reviewer / security-auditor / критичное ревью / Plan-агент | opus (Opus 5.5), effort high |
 | dependency-manager (аудит зависимостей, CVE, lockfile) | opus (Opus 5.5), effort low |
@@ -192,7 +193,7 @@ Rollback завязан на **матрицу потребителей**, не �
 | Boilerplate по точному брифу | or-task.sh qwen; приватный код → `ask -l -p` (локально, 0 $, медленно) |
 | Фоллбек при горящем недельном лимите | sonnet (Sonnet 5.5) |
 
-Сначала снижай effort, потом меняй модель; sonnet — только фоллбек.
+Сначала снижай effort, потом меняй модель; sonnet — только фоллбек. Воркеров на Fable не переводить: токен вдвое дороже Opus, а на подписке Fable ограничен 50% недельного лимита.
 
 ### Эскалация (second opinion)
 
@@ -200,7 +201,7 @@ Rollback завязан на **матрицу потребителей**, не �
 
 - Постоянный флот уже умеет: haiku/opus-medium агент при критичной развилке зовёт `~/.claude/scripts/consult-opus.sh "вопрос" [файлы] </dev/null` (headless Opus 5.5 effort high, read-only, лимит 1-2 за задачу) либо возвращает `ESCALATE: <вопрос>` в отчёте.
 - Спавнишь `general-purpose` с кастомным брифом → вставь правило эскалации в бриф явно (скопируй блок «Second opinion» из любого агента флота).
-- Main получил `ESCALATE` в отчёте → решает сам или задаёт точечный вопрос opus-агенту (effort high). НЕ перезапускай всю задачу на effort high — эскалируется вопрос, не работа.
+- Main получил `ESCALATE` в отчёте → решает сам: main работает на старшей модели. Всю задачу на effort high не перезапускать — эскалируется вопрос, не работа.
 
 ## Hard caps
 

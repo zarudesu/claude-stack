@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Second opinion от старшей модели для субагентов (opus/sonnet/haiku), которые
-# не могут спавнить агентов сами. Headless-вызов claude в print-режиме.
+# Second opinion для субагентов (opus/sonnet/haiku), которые не могут спавнить
+# агентов сами. Headless-вызов claude в print-режиме.
 #
 # Использование:
 #   consult-opus.sh "вопрос одним абзацем" [file1 file2 ...]
 #   echo "контекст" | consult-opus.sh "вопрос"
 #
 # Модель по умолчанию — opus (= Claude Opus 5.5 в CC ≥2.1.280); override: CONSULT_MODEL=sonnet|opus|fable.
+# fable (= Fable 5.2 в CC ≥2.1.321) — только если ответ на opus не снял вопрос: в print-режиме
+# Fable может списывать usage credits без подтверждения. Обычный путь выше opus — ESCALATE в отчёте, решает main.
 # Effort по умолчанию — high; override: CONSULT_EFFORT=low|medium|high|xhigh|max.
 # Консультант read-only (Read/Grep/Glob), максимум 6 turns.
 set -euo pipefail

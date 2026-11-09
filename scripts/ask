@@ -55,7 +55,7 @@ case "$target" in
     M="${ASK_LOCAL_MODEL:-qwen3.6-35b-a3b-128k}"
     cmd+=(ANTHROPIC_BASE_URL=http://localhost:11434 ANTHROPIC_AUTH_TOKEN=ollama ANTHROPIC_API_KEY=
           ANTHROPIC_MODEL="$M" ANTHROPIC_DEFAULT_HAIKU_MODEL="$M" ANTHROPIC_DEFAULT_SONNET_MODEL="$M"
-          ANTHROPIC_DEFAULT_OPUS_MODEL="$M" CLAUDE_CODE_SUBAGENT_MODEL="$M"
+          ANTHROPIC_DEFAULT_OPUS_MODEL="$M" ANTHROPIC_DEFAULT_FABLE_MODEL="$M" CLAUDE_CODE_SUBAGENT_MODEL="$M"
           CLAUDE_CODE_AUTO_COMPACT_WINDOW=120000
           claude --settings '{"enabledPlugins":{"claude-mem@thedotmack":false}}') ;;
   claude) cmd+=(claude) ;;

@@ -169,7 +169,7 @@ def cmd_run(args):
         f"Details from the task breakdown:\n{commits}\n"
         "Make the code change only; do not commit; do not push; skip installing dependencies unless strictly required."
     )
-    cli_model = "claude-fable-5" if model == "fable" else model
+    cli_model = "claude-fable-5-2" if model == "fable" else model
     claude_cmd = [
         "claude", "-p", prompt,
         "--model", cli_model,
