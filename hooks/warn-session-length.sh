@@ -40,5 +40,5 @@ if [ "$n" -ge "$cap" ]; then
   exit 2
 fi
 
-printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"SESSION-LENGTH WARNING: %s API-записей в этой сессии (жёсткий потолок %s, дальше промпты блокируются). Каждый ход перечитывает весь контекст. Закончена логическая задача - предложи пользователю /clear (handoff в plan.md уже по правилам). Новых волн агентов не запускать."}}\n' "$n" "$cap"
+printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"SESSION-LENGTH WARNING: %s API-записей в этой сессии (жёсткий потолок %s, дальше промпты блокируются). Каждый ход перечитывает весь контекст. Закончена логическая задача - предложи пользователю /clear (handoff в plan.md уже по правилам). Новый scope не начинать; начатую просьбу владельца довести до конца (агенты можно), затем handoff и /clear."}}\n' "$n" "$cap"
 exit 0
